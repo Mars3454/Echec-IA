@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "gen_0",
+  "created_at": "2026-02-08T20:00:03",
+  "weights": {
+    "center_main": 20,
+    "center_ext": 5,
+    "develop": 15,
+    "castled": 30,
+    "queen_early": 10,
+    "mobility": 1,
+    "in_check": 25
+  }
+}
