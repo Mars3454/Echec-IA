@@ -13,8 +13,8 @@ from __future__ import annotations
 import sys
 from typing import List, Optional
 
-from .engine import GameState, initial_board, fen_to_state, uci_to_move, apply_move_inplace, state_to_fen
-from .ai import choose_best_move, choose_best_move_timed
+from chess_ai.engine_chess import *
+from chess_ai.ai import *
 
 ENGINE_NAME = "ChessTkAI"
 ENGINE_AUTHOR = "Valerie + ChatGPT"
@@ -92,13 +92,13 @@ def uci_loop():
             if movetime is not None and (depth is None):
                 res = choose_best_move_timed(state, movetime_ms=movetime, max_depth=6)
             else:
-                res = choose_best_move(state, depth=depth or 3)
+                res = choose_best_move(state, depth=depth or 2)
 
             if res.move is None:
                 # pas de coups: protocole UCI veut quand même un bestmove
                 print("bestmove 0000", flush=True)
             else:
-                from .engine import move_to_uci
+                from engine_chess import move_to_uci
                 print(f"bestmove {move_to_uci(res.move)}", flush=True)
 
         elif line == "d":

@@ -1,0 +1,3 @@
+{"time": "2026-02-15T19:40:21", "iter": 1, "best_file": "weights_gen_1.json", "cand_winrate": 0.5333333333333333, "accepted": true}
+{"time": "2026-02-15T20:03:33", "iter": 2, "best_file": "weights_gen_1.json", "cand_winrate": 0.5083333333333333, "accepted": false}
+{"time": "2026-02-15T20:24:17", "iter": 3, "best_file": "weights_gen_1.json", "cand_winrate": 0.5083333333333333, "accepted": false}

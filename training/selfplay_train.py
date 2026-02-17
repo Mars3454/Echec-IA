@@ -10,10 +10,9 @@ Utilité:
 from __future__ import annotations
 import json, os, random
 from datetime import datetime
-
-from chess_ai.engine import GameState, initial_board, apply_move_inplace, uci_to_move, is_checkmate, is_stalemate
-from chess_ai.ai import choose_best_move_timed
-from chess_ai.weights import ensure_defaults, latest_generation_index, gen_path, save_gen, load_gen, set_best
+from chess_ai.engine_chess import *
+from chess_ai.ai import *
+from training.weights import *
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
@@ -33,11 +32,11 @@ def play_self_game(weights_w: dict, weights_b: dict, our_movetime: int, max_plie
     for _ in range(max_plies):
         if is_checkmate(state) or is_stalemate(state): break
         if state.turn==1:
-            res=choose_best_move_timed(state, movetime_ms=our_movetime, max_depth=6, weights=weights_w)
+            res=choose_best_move_timed(state, movetime_ms=our_movetime, max_depth=2, weights=weights_w)
         else:
-            res=choose_best_move_timed(state, movetime_ms=our_movetime, max_depth=6, weights=weights_b)
+            res=choose_best_move_timed(state, movetime_ms=our_movetime, max_depth=2, weights=weights_b)
         if res.move is None: break
-        uci = __import__("chess_ai.engine", fromlist=["move_to_uci"]).move_to_uci(res.move)
+        uci = __import__("engine", fromlist=["move_to_uci"]).move_to_uci(res.move)
         apply_move_inplace(state, uci_to_move(state, uci))
     return result_from_state(state)
 
@@ -73,7 +72,7 @@ def main():
     best_file=gen_path(gen)
     best=load_gen(best_file)
 
-    games=int(cfg.get("games_per_eval",60))
+    games=int(cfg.get("games_per_eval",1))
     movetime=int(cfg.get("our_movetime_ms",50))
     max_plies=int(cfg.get("max_game_plies",160))
     step=int(cfg.get("mutation_step",3))
@@ -101,4 +100,6 @@ def main():
     print("✅ Self-play fini. Best:", best_file)
 
 if __name__=="__main__":
+    print(True)
     main()
+    
