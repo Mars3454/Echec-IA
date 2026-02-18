@@ -19,7 +19,7 @@ class Variable:
         }
 
         # Profondeur de recherche par défaut
-        self.DEPTH = 3
+        self.DEPTH = 4
 
         # Scores de mat
         self.MATE_SCORE = 99999

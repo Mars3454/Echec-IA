@@ -205,15 +205,24 @@ def legal_moves(state: GameState) -> List[Move]:
 def apply_move_inplace(state: GameState, move) -> None:
     """
     Applique un coup sur l'état (in-place).
-    Accepte un Move (wrapper) ou un chess.Move.
+    Accepte un Move (wrapper), un chess.Move ou ignore None (sécurité).
     """
+    if move is None:
+        # Sécurité absolue : on ne fait rien
+        return
+
     b = state.get_board()
+
     if isinstance(move, Move):
         cm = move.to_chess()
     elif isinstance(move, chess.Move):
         cm = move
     else:
         raise TypeError(f"Type de coup inconnu : {type(move)}")
+
+    if cm not in b.legal_moves:
+        raise ValueError(f"Coup illégal : {cm.uci()}")
+
     b.push(cm)
     state._move_history.append(cm.uci())
 

@@ -1,60 +1,131 @@
 """
-opening_book.py - Petit livre d'ouvertures (UCI moves).
-But: donner à l'IA un début plus "humain" + variété, sans calcul.
-
-Structure: dict[tuple(history_uci_moves)] -> list[next_move_uci]
-- history est la liste des coups depuis startpos (ex: ["e2e4","c7c5",...])
+opening_book.py - Livre structuré par lignes complètes.
+L'IA choisit une ligne et la suit.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Tuple
+from typing import List, Dict
 import random
+OPENING_PLIES = 6
 
-BOOK: Dict[Tuple[str, ...], List[str]] = {
-    # --- Débuts blancs ---
-    (): ["e2e4", "d2d4", "c2c4", "g1f3"],
+# --- Lignes complètes (4-6 coups) ---
 
-    # --- Réponses noires à 1.e4 ---
-    ("e2e4",): ["c7c5", "e7e5", "e7e6", "c7c6"],
+OPENING_LINES: Dict[str, List[List[str]]] = {
 
-    # Sicilienne: 1.e4 c5
-    ("e2e4","c7c5"): ["g1f3", "b1c3"],
-    ("e2e4","c7c5","g1f3"): ["d7d6", "e7e6"],
-    ("e2e4","c7c5","b1c3"): ["d7d6", "e7e6"],
+    "white": [
+    # Italienne classique
+    ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"],
 
-    # 1.e4 e5
-    ("e2e4","e7e5"): ["g1f3", "b1c3", "f1c4"],
-    ("e2e4","e7e5","g1f3"): ["b8c6", "d7d6"],
-    ("e2e4","e7e5","g1f3","b8c6"): ["f1b5", "f1c4", "d2d4"],  # Espagnole / Italienne / centre
+    # Scotch
+    ["e2e4", "e7e5", "g1f3", "b8c6", "d2d4"],
 
-    # Française: 1.e4 e6
-    ("e2e4","e7e6"): ["d2d4"],
-    ("e2e4","e7e6","d2d4"): ["d7d5"],
+    # Sicilienne ouverte
+    ["e2e4", "c7c5", "g1f3", "d7d6", "d2d4"],
 
-    # Caro-Kann: 1.e4 c6
-    ("e2e4","c7c6"): ["d2d4"],
-    ("e2e4","c7c6","d2d4"): ["d7d5"],
+    # Française avance
+    ["e2e4", "e7e6", "d2d4", "d7d5", "e4e5"],
 
-    # --- Réponses noires à 1.d4 ---
-    ("d2d4",): ["d7d5", "g8f6", "e7e6"],
+    # Gambit Dame refusé
+    ["d2d4", "d7d5", "c2c4", "e7e6", "b1c3"],
 
-    # Gambit Dame: 1.d4 d5 2.c4
-    ("d2d4","d7d5"): ["c2c4", "g1f3"],
-    ("d2d4","d7d5","c2c4"): ["e7e6", "c7c6", "d5c4"],  # QGD / Slav / acceptée
-    ("d2d4","g8f6"): ["c2c4", "g1f3"],
-    ("d2d4","g8f6","c2c4"): ["g7g6", "e7e6", "c7c5"],  # Indiennes
+    # Système Londres (ultra solide)
+    ["d2d4", "d7d5", "g1f3", "g8f6", "c1f4"],
 
-    # Anglaise: 1.c4
-    ("c2c4",): ["e7e5", "g8f6", "c7c5"],
+    # Anglaise
+    ["c2c4", "e7e5", "b1c3", "g8f6", "g2g3"],
 
-    # Réti: 1.Nf3
-    ("g1f3",): ["d7d5", "g8f6", "c7c5"],
+    # Réti
+    ["g1f3", "d7d5", "c2c4", "e7e6"],
+],
+
+
+    "black_vs_e4": [
+    # Sicilienne Najdorf setup simple
+    ["e2e4", "c7c5", "g1f3", "d7d6", "d2d4"],
+
+    # Sicilienne classique
+    ["e2e4", "c7c5", "g1f3", "b8c6"],
+
+    # Française
+    ["e2e4", "e7e6", "d2d4", "d7d5"],
+
+    # Caro-Kann
+    ["e2e4", "c7c6", "d2d4", "d7d5"],
+
+    # Défense ouverte e5
+    ["e2e4", "e7e5", "g1f3", "b8c6"],
+],
+
+    "black_vs_d4": [
+    # Gambit Dame refusé
+    ["d2d4", "d7d5", "c2c4", "e7e6"],
+
+    # Slave
+    ["d2d4", "d7d5", "c2c4", "c7c6"],
+
+    # Est-indienne
+    ["d2d4", "g8f6", "c2c4", "g7g6"],
+
+    # Nimzo-lite
+    ["d2d4", "g8f6", "c2c4", "e7e6"],
+],
+
+    "black_vs_c4": [
+    ["c2c4", "e7e5", "b1c3", "g8f6"],
+    ["c2c4", "g8f6", "b1c3", "e7e6"],
+],
+
+    "black_vs_nf3": [
+        ["g1f3", "d7d5", "c2c4", "e7e6"],
+        ["g1f3", "g8f6", "c2c4", "g7g6"],
+],
 }
 
-def pick_book_move(history: list[str]) -> str | None:
-    """Retourne un coup UCI depuis le livre, sinon None."""
-    key = tuple(history)
-    moves = BOOK.get(key)
-    if not moves:
+
+# Ligne en cours suivie par l’IA
+CURRENT_LINE: List[str] | None = None
+
+
+def reset_line():
+    global CURRENT_LINE
+    CURRENT_LINE = None
+
+
+def pick_book_move(history: List[str], is_white: bool) -> str | None:
+    global CURRENT_LINE
+
+    # Fin forcée du livre
+    if len(history) >= OPENING_PLIES:
+        reset_line()
         return None
-    return random.choice(moves)
+
+    # Sélection de ligne
+    if CURRENT_LINE is None:
+        if len(history) == 0 and is_white:
+            CURRENT_LINE = random.choice(OPENING_LINES["white"])
+
+        elif len(history) == 1 and not is_white:
+            first = history[0]
+            if first == "e2e4":
+                CURRENT_LINE = random.choice(OPENING_LINES["black_vs_e4"])
+            elif first == "d2d4":
+                CURRENT_LINE = random.choice(OPENING_LINES["black_vs_d4"])
+            elif first == "c2c4":
+                CURRENT_LINE = random.choice(OPENING_LINES["black_vs_c4"])
+            elif first == "g1f3":
+                CURRENT_LINE = random.choice(OPENING_LINES["black_vs_nf3"])
+            else:
+                return None
+
+    if CURRENT_LINE is None:
+        return None
+
+    if len(history) >= len(CURRENT_LINE):
+        reset_line()
+        return None
+
+    if history == CURRENT_LINE[:len(history)]:
+        return CURRENT_LINE[len(history)]
+
+    reset_line()
+    return None

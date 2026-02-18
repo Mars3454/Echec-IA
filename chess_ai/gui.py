@@ -14,7 +14,7 @@ from tkinter import ttk, messagebox
 from typing import Optional, Tuple, List, Dict
 import time
 import chess
-
+from chess_ai.opening_book import *
 # ── Moteur ──────────────────────────────────────────────────────────────────
 from chess_ai.engine_chess import *
 
@@ -165,8 +165,8 @@ class ChessApp:
 
         self.game_mode           = None
         self.human_color         = 1
-        self.ai_depth_white      = 3
-        self.ai_depth_black      = 3
+        self.ai_depth_white      = 4
+        self.ai_depth_black      = 4
         self.ai_vs_ai_running    = False
         self.ai_vs_ai_paused     = False
         self.animation_delay     = 800
@@ -291,6 +291,8 @@ class ChessApp:
         self.pause_btn.config(state="disabled", text="Pause")
         self.state = GameState(board=initial_board())
         self.selected = None
+        reset_line()   # 🔥 IMPORTANT
+        self.ai_vs_ai_running = False
         self.legal_from_selected = []
         self.last_move = None
         self.ai_depth_white   = int(self.depth_white_var.get())
@@ -345,6 +347,32 @@ class ChessApp:
     # --------------------------------------------------------------- analyse -
 
     def _analyze_position(self, depth: int):
+        board = self.state.get_board()
+        history = get_history_uci(board)
+
+        # 🔒 Livre d’ouverture
+        if len(history) < 6:
+            book_move_uci = pick_book_move(
+                history,
+                is_white=(board.turn == chess.WHITE)
+            )
+
+            if book_move_uci:
+                # 🔁 Conversion UCI → Move (engine)
+                mv = chess.Move.from_uci(book_move_uci)
+                sr = 7 - chess.square_rank(mv.from_square)
+                sc = chess.square_file(mv.from_square)
+                er = 7 - chess.square_rank(mv.to_square)
+                ec = chess.square_file(mv.to_square)
+
+                engine_move = Move(sr, sc, er, ec)
+
+                return 0, [{
+                    "move": book_move_uci,
+                    "move_obj": engine_move,
+                    "score": 0
+                }], 1, 0.0
+            
         start = time.time()
         moves = legal_moves(self.state)
         if not moves:
@@ -382,6 +410,7 @@ class ChessApp:
         return best_score, moves_data, total_nodes, elapsed
 
     def ai_play(self):
+
         if self._check_end(): return
         if self.state.turn == self.human_color: return
 
