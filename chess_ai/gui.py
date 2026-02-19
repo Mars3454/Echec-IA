@@ -78,23 +78,50 @@ class AnalysisPanel(tk.Frame):
 
     # ---- mise à jour --------------------------------------------------------
 
-    def update_evaluation(self, score: float, perspective: int = 1):
-        if abs(score) >= MATE_SCORE - 10:
-            text  = f"Mat en {int(MATE_SCORE - abs(score))}"
-            color = "green" if score > 0 else "red"
+    @staticmethod
+    def _safe_score(score: float) -> float:
+        import math
+        if math.isnan(score) or math.isinf(score):
+            return MATE_SCORE if score > 0 else -MATE_SCORE
+        return score
+
+    @staticmethod
+    def _score_text(score: float) -> str:
+        import math
+        if math.isnan(score) or math.isinf(score):
+            score = MATE_SCORE if score > 0 else -MATE_SCORE
+        if abs(score) >= MATE_SCORE - 50:
+            # plies jusqu'au mat → coups complets
+            plies = int(MATE_SCORE - abs(score))
+            moves = max(1, (plies + 1) // 2)
+            sign  = "+" if score > 0 else "-"
+            return f"Mat{sign}{moves}"
+        elif abs(score) > 10:
+            return f"{score / 100.0:+.2f}"
         else:
-            text  = f"{score / 100.0:+.2f}" if abs(score) > 10 else f"{score:+.2f}"
-            color = ("gray" if abs(score) < 0.5
-                     else ("green" if score > 0 else "red"))
+            return f"{score:+.2f}"
+
+    def update_evaluation(self, score: float, perspective: int = 1):
+        import math
+        if math.isnan(score) or math.isinf(score):
+            score = MATE_SCORE if score > 0 else -MATE_SCORE
+        text  = self._score_text(score)
+        color = ("red" if abs(score) >= MATE_SCORE - 50 and score < 0
+                 else "green" if abs(score) >= MATE_SCORE - 50
+                 else "gray" if abs(score) < 0.5
+                 else "green" if score > 0 else "red")
         self.eval_label.config(text=text, fg=color)
         self._draw_bar(score)
 
     def _draw_bar(self, score: float):
+        import math
         c = self.eval_bar
         w = c.winfo_width() or 400
         c.delete("all")
-        clamped = max(-10, min(10, score if abs(score) <= 10 else score / 100))
-        ratio   = (clamped + 10) / 20.0
+        if math.isnan(score) or math.isinf(score):
+            score = MATE_SCORE if score > 0 else -MATE_SCORE
+        clamped = max(-10.0, min(10.0, score if abs(score) <= 10 else score / 100.0))
+        ratio   = (clamped + 10.0) / 20.0
         x = int(w * ratio)
         c.create_rectangle(0, 0, x,  20, fill="white",  outline="")
         c.create_rectangle(x, 0, w,  20, fill="black",  outline="")
@@ -118,7 +145,7 @@ class AnalysisPanel(tk.Frame):
 
         for i, d in enumerate(moves_data[:5]):
             uci   = d["move"]
-            score = d["score"]
+            score = self._safe_score(d["score"])
             mf    = tk.Frame(self.moves_frame, bd=1, relief="solid", padx=5, pady=3)
             mf.pack(fill="x", pady=2)
             if chosen_uci and uci == chosen_uci:
@@ -126,14 +153,8 @@ class AnalysisPanel(tk.Frame):
 
             tk.Label(mf, text=f"#{i+1}", font=("Helvetica", 9, "bold")).pack(side="left")
             tk.Label(mf, text=uci, font=("Courier", 10, "bold")).pack(side="left", padx=10)
-
-            if abs(score) >= MATE_SCORE - 10:
-                etxt = f"Mat en {int(MATE_SCORE - abs(score))}"
-            elif abs(score) > 10:
-                etxt = f"{score / 100.0:+.2f}"
-            else:
-                etxt = f"{score:+.2f}"
-            tk.Label(mf, text=etxt, font=("Helvetica", 9)).pack(side="right")
+            tk.Label(mf, text=self._score_text(score),
+                     font=("Helvetica", 9)).pack(side="right")
 
             if chosen_uci and uci == chosen_uci:
                 tk.Label(mf, text="✓ CHOISI", fg="green",
@@ -165,8 +186,8 @@ class ChessApp:
 
         self.game_mode           = None
         self.human_color         = 1
-        self.ai_depth_white      = 4
-        self.ai_depth_black      = 4
+        self.ai_depth_white      = 3
+        self.ai_depth_black      = 3
         self.ai_vs_ai_running    = False
         self.ai_vs_ai_paused     = False
         self.animation_delay     = 800
@@ -373,41 +394,49 @@ class ChessApp:
                     "score": 0
                 }], 1, 0.0
             
-        start = time.time()
-        moves = legal_moves(self.state)
+        start       = time.time()
+        moves       = legal_moves(self.state)
         if not moves:
             return evaluate(self.state.get_board()), [], 0, 0.0
 
         board       = self.state.get_board()
-        tt          = {}
+        nodes_ref   = [0]
         moves_data  = []
-        total_nodes = 0
 
+        # ── Évaluer chaque coup racine individuellement ──────────────────────
+        # On joue chaque coup, on lance negamax sur le nœud enfant avec ply=1,
+        # et on récupère le score DEPUIS CET ENFANT (point de vue adversaire).
+        # Le score de mat est alors cohérent : -(MATE_SCORE - ply_interne)
+        # avec ply_interne >= 1, donc MATE_SCORE - abs(score) >= 1 → correct.
         for move in moves:
             child_board = board.copy()
             child_board.push(move.to_chess())
 
-            score, nodes, _ = alphabeta(
-                child_board, depth - 1,
+            # negamax retourne le score du joueur actif dans child_board
+            score, _ = negamax(
+                child_board,
+                depth - 1,
                 -float("inf"), float("inf"),
-                1, tt, None
+                nodes_ref,
+                ply=1,          # ply=1 : on est déjà à 1 coup de la racine
+                weights=None
             )
-            score = -score  # point de vue de l'adversaire
+            # Inverser : ramener au point de vue du joueur qui joue en racine
+            score = -score
 
-            total_nodes += nodes
             moves_data.append({
                 "move":     move_to_uci(move),
                 "move_obj": move,
                 "score":    score,
             })
 
-        # Trier : meilleur coup en premier selon le camp qui joue
-        reverse = (self.state.turn == 1)  # blancs = maximiser
-        moves_data.sort(key=lambda x: x["score"], reverse=reverse)
+        # Trier du meilleur au pire (score le plus élevé = meilleur pour
+        # le joueur actif, convention negamax)
+        moves_data.sort(key=lambda x: x["score"], reverse=True)
 
         best_score = moves_data[0]["score"] if moves_data else 0.0
         elapsed    = time.time() - start
-        return best_score, moves_data, total_nodes, elapsed
+        return best_score, moves_data, nodes_ref[0], elapsed
 
     def ai_play(self):
 

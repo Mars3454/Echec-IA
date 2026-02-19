@@ -1,151 +1,275 @@
+"""
+evalu.py - Heuristique d'évaluation entièrement pilotée par les poids entraînables.
+
+Toutes les constantes numériques proviennent du dict `weights` passé en paramètre.
+Si weights=None, on utilise DEFAULT_WEIGHTS (mode normal sans entraînement).
+
+Point de vue : score positif = bon pour les NOIRS (convention héritée du code original).
+"""
+
 import chess
-from chess_ai.var import Variable
+from typing import Optional, Dict
 
-variable = Variable()
+# Import des défauts (fallback si weights=None)
+from training.weights import DEFAULT_WEIGHTS
 
-CENTER = [chess.D4, chess.E4, chess.D5, chess.E5]
+# Cases du centre
+CENTER_MAIN = [chess.D4, chess.E4, chess.D5, chess.E5]
+CENTER_EXT  = [chess.C3, chess.D3, chess.E3, chess.F3,
+               chess.C4,                     chess.F4,
+               chess.C5,                     chess.F5,
+               chess.C6, chess.D6, chess.E6, chess.F6]
 
-WEIGHTS = {
-    "opening": {
-        "material": 1.0,
-        "center": 1.2,
-        "development": 1.3,
-        "king_safety": 0.8,
-        "mobility": 0.5,
-        "pawns": 0.6,
-    },
-    "middlegame": {
-        "material": 1.1,
-        "center": 1.0,
-        "development": 0.7,
-        "king_safety": 1.2,
-        "mobility": 1.0,
-        "pawns": 1.0,
-    },
-    "endgame": {
-        "material": 1.3,
-        "center": 0.5,
-        "development": 0.0,
-        "king_safety": 0.6,
-        "mobility": 1.2,
-        "pawns": 1.4,
-    }
-}
+# Cache léger pour éviter de reconstruire PIECE_VALUES à chaque appel
+_PIECE_VALUES_CACHE: Dict[str, dict] = {}
 
 
-def game_phase(board):
+def _get_piece_values(w: Dict[str, float]) -> dict:
+    """Construit le dict pièce→valeur depuis les poids."""
+    key = f"{w['pv_pawn']},{w['pv_knight']},{w['pv_bishop']},{w['pv_rook']},{w['pv_queen']}"
+    if key not in _PIECE_VALUES_CACHE:
+        _PIECE_VALUES_CACHE[key] = {
+            chess.PAWN:   w["pv_pawn"],
+            chess.KNIGHT: w["pv_knight"],
+            chess.BISHOP: w["pv_bishop"],
+            chess.ROOK:   w["pv_rook"],
+            chess.QUEEN:  w["pv_queen"],
+            chess.KING:   0.0,
+        }
+    return _PIECE_VALUES_CACHE[key]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Phase de jeu
+# ──────────────────────────────────────────────────────────────────────────────
+
+def game_phase(board: chess.Board, w: Dict[str, float]) -> str:
     material = 0
     for p in [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]:
         material += len(board.pieces(p, chess.WHITE))
         material += len(board.pieces(p, chess.BLACK))
-    if material > 20:
+    if material > w["phase_opening_threshold"]:
         return "opening"
-    elif material > 10:
+    elif material > w["phase_endgame_threshold"]:
         return "middlegame"
     else:
         return "endgame"
 
 
-def king_safety(board, color):
-    king = board.king(color)
-    if king is None:
-        return -5
-    safety = 0
-    for sq in board.attacks(king):
-        if board.is_attacked_by(not color, sq):
-            safety -= 0.2
-    if board.has_castling_rights(color):
-        safety += 0.5
-    return safety
+# ──────────────────────────────────────────────────────────────────────────────
+# Sous-fonctions heuristiques
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _material_score(board: chess.Board, pv: dict) -> float:
+    """Score matériel brut (noir - blanc)."""
+    black = sum(len(board.pieces(p, chess.BLACK)) * pv[p] for p in pv)
+    white = sum(len(board.pieces(p, chess.WHITE)) * pv[p] for p in pv)
+    return black - white
 
 
-def mobility(board, color):
-    board_turn = board.turn
-    board.turn = color
-    moves = board.legal_moves.count()
-    board.turn = board_turn
-    return moves * 0.05
+def _center_score(board: chess.Board, w: Dict[str, float]) -> float:
+    """Contrôle du centre (principal + étendu)."""
+    main_black = sum(board.is_attacked_by(chess.BLACK, sq) for sq in CENTER_MAIN)
+    main_white = sum(board.is_attacked_by(chess.WHITE, sq) for sq in CENTER_MAIN)
+    ext_black  = sum(board.is_attacked_by(chess.BLACK, sq) for sq in CENTER_EXT)
+    ext_white  = sum(board.is_attacked_by(chess.WHITE, sq) for sq in CENTER_EXT)
+    return (w["center_attack_bonus"] * (main_black - main_white)
+            + w["center_ext_bonus"]  * (ext_black  - ext_white))
 
 
-def pawn_structure_score(board, color):
-    score = 0
-    pawns = board.pieces(chess.PAWN, color)
-    for file in range(8):
-        pawns_in_file = [p for p in pawns if chess.square_file(p) == file]
-        if len(pawns_in_file) > 1:
-            score -= 0.3 * (len(pawns_in_file) - 1)
-        for p in pawns_in_file:
-            rank = chess.square_rank(p)
-            direction = 1 if color == chess.WHITE else -1
-            blocked = False
-            for f in [file - 1, file, file + 1]:
-                if 0 <= f <= 7:
-                    r_range = range(rank + direction, 8, direction) if color == chess.WHITE else range(rank + direction, -1, direction)
+def _development_score(board: chess.Board, w: Dict[str, float]) -> float:
+    """Développement en ouverture : cavaliers et fous hors de leur case initiale."""
+    # Nombre de pièces mineures développées (pas sur la rangée de départ)
+    def developed(color):
+        count = 0
+        back_rank = 0 if color == chess.WHITE else 7
+        for pt in [chess.KNIGHT, chess.BISHOP]:
+            for sq in board.pieces(pt, color):
+                if chess.square_rank(sq) != back_rank:
+                    count += 1
+        return count
+    return float(developed(chess.BLACK) - developed(chess.WHITE))
+
+
+def _king_safety_score(board: chess.Board, w: Dict[str, float]) -> float:
+    """Sécurité du roi."""
+    def safety(color):
+        king = board.king(color)
+        if king is None:
+            return -5.0
+        s = 0.0
+        for sq in board.attacks(king):
+            if board.is_attacked_by(not color, sq):
+                s -= w["ks_attack_penalty"]
+        if board.has_castling_rights(color):
+            s += w["ks_castling_bonus"]
+        return s
+    return safety(chess.BLACK) - safety(chess.WHITE)
+
+
+def _mobility_score(board: chess.Board, w: Dict[str, float]) -> float:
+    """Mobilité : nombre de coups légaux disponibles."""
+    saved_turn = board.turn
+
+    board.turn = chess.BLACK
+    black_moves = board.legal_moves.count()
+
+    board.turn = chess.WHITE
+    white_moves = board.legal_moves.count()
+
+    board.turn = saved_turn
+    return w["mobility_factor"] * (black_moves - white_moves)
+
+
+def _pawn_structure_score(board: chess.Board, w: Dict[str, float]) -> float:
+    """Structure de pions : doublés, isolés, passés."""
+    def score_for(color):
+        s = 0.0
+        pawns = board.pieces(chess.PAWN, color)
+        opp   = not color
+        direction = 1 if color == chess.WHITE else -1
+
+        for file in range(8):
+            pawns_in_file = [p for p in pawns if chess.square_file(p) == file]
+
+            # Doublés
+            if len(pawns_in_file) > 1:
+                s -= w["pawn_doubled_penalty"] * (len(pawns_in_file) - 1)
+
+            for p in pawns_in_file:
+                rank = chess.square_rank(p)
+
+                # Passé : aucun pion adverse devant (colonne + adjacentes)
+                passed = True
+                for f in [file - 1, file, file + 1]:
+                    if not (0 <= f <= 7):
+                        continue
+                    r_range = (range(rank + 1, 8) if color == chess.WHITE
+                               else range(rank - 1, -1, -1))
                     for r in r_range:
-                        sq = chess.square(f, r)
-                        if sq in board.pieces(chess.PAWN, not color):
-                            blocked = True
+                        if chess.square(f, r) in board.pieces(chess.PAWN, opp):
+                            passed = False
                             break
-                if blocked:
-                    break
-            if not blocked:
-                score += 0.5
-            isolated = True
-            for af in [file - 1, file + 1]:
-                if 0 <= af <= 7:
-                    if any(chess.square_file(p2) == af for p2 in pawns):
-                        isolated = False
+                    if not passed:
                         break
-            if isolated:
-                score -= 0.3
-    return score
+                if passed:
+                    # Bonus proportionnel à l'avancement
+                    advancement = (rank if color == chess.WHITE else 7 - rank)
+                    s += w["pawn_passed_bonus"] * (1 + advancement * 0.1)
+
+                # Isolé
+                isolated = True
+                for af in [file - 1, file + 1]:
+                    if 0 <= af <= 7:
+                        if any(chess.square_file(p2) == af for p2 in pawns):
+                            isolated = False
+                            break
+                if isolated:
+                    s -= w["pawn_isolated_penalty"]
+
+        return s
+
+    return score_for(chess.BLACK) - score_for(chess.WHITE)
 
 
-def evaluate_board(board: chess.Board):
+def _endgame_king_score(board: chess.Board, w: Dict[str, float]) -> float:
+    """En finale : activité et centralisation du roi."""
+    def king_score(color):
+        king = board.king(color)
+        if king is None:
+            return 0.0
+        # Activité : nombre de cases attaquées
+        activity = w["eg_king_activity"] * len(list(board.attacks(king)))
+        # Centralisation : distance au centre
+        file = chess.square_file(king)
+        rank = chess.square_rank(king)
+        dist_center = abs(file - 3.5) + abs(rank - 3.5)
+        centralization = w["eg_king_centralization"] * (7.0 - dist_center)
+        return activity + centralization
+
+    return king_score(chess.BLACK) - king_score(chess.WHITE)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Évaluation principale
+# ──────────────────────────────────────────────────────────────────────────────
+
+def evaluate_board(board: chess.Board,
+                   weights: Optional[Dict[str, float]] = None) -> float:
+    """
+    Évalue la position.
+    Score positif = bon pour les NOIRS.
+    weights=None → utilise DEFAULT_WEIGHTS.
+    """
+    if weights is None:
+        weights = DEFAULT_WEIGHTS
+
+    # Cas terminaux
     if board.is_checkmate():
-        return 9999 if board.turn == chess.WHITE else -9999
-    if board.is_stalemate():
-        return 0
-    if board.is_insufficient_material():
-        return 0
+        return 9999.0 if board.turn == chess.WHITE else -9999.0
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0.0
 
-    phase = game_phase(board)
-    w = WEIGHTS[phase]
-    score = 0
+    w     = weights
+    phase = game_phase(board, w)
+    pv    = _get_piece_values(w)
 
-    black_material = sum(len(board.pieces(p, chess.BLACK)) * variable.PIECE_VALUES[p] for p in variable.PIECE_VALUES)
-    white_material = sum(len(board.pieces(p, chess.WHITE)) * variable.PIECE_VALUES[p] for p in variable.PIECE_VALUES)
-    score += w["material"] * (black_material - white_material)
-
-    black_center = sum(board.is_attacked_by(chess.BLACK, sq) for sq in CENTER)
-    white_center = sum(board.is_attacked_by(chess.WHITE, sq) for sq in CENTER)
-    score += w["center"] * (black_center - white_center) * 0.3
-
+    # Sélection des multiplicateurs de phase
     if phase == "opening":
-        score += w["development"] * (
-            len(board.pieces(chess.KNIGHT, chess.BLACK)) * 0.3
-            - len(board.pieces(chess.KNIGHT, chess.WHITE)) * 0.3
-            + len(board.pieces(chess.BISHOP, chess.BLACK)) * 0.3
-            - len(board.pieces(chess.BISHOP, chess.WHITE)) * 0.3
-        )
+        pm = {
+            "material":    w["op_material"],
+            "center":      w["op_center"],
+            "development": w["op_development"],
+            "king_safety": w["op_king_safety"],
+            "mobility":    w["op_mobility"],
+            "pawns":       w["op_pawns"],
+        }
+    elif phase == "middlegame":
+        pm = {
+            "material":    w["mg_material"],
+            "center":      w["mg_center"],
+            "development": w["mg_development"],
+            "king_safety": w["mg_king_safety"],
+            "mobility":    w["mg_mobility"],
+            "pawns":       w["mg_pawns"],
+        }
+    else:  # endgame
+        pm = {
+            "material":    w["eg_material"],
+            "center":      w["eg_center"],
+            "development": w["eg_development"],
+            "king_safety": w["eg_king_safety"],
+            "mobility":    w["eg_mobility"],
+            "pawns":       w["eg_pawns"],
+        }
 
-    score += w["king_safety"] * (king_safety(board, chess.BLACK) - king_safety(board, chess.WHITE))
+    score = 0.0
 
-    if phase in ["middlegame", "endgame"]:
-        score += w["mobility"] * (mobility(board, chess.BLACK) - mobility(board, chess.WHITE))
+    # Matériel
+    score += pm["material"] * _material_score(board, pv)
 
+    # Centre
+    score += pm["center"] * _center_score(board, w)
+
+    # Développement (seulement en ouverture et milieu de jeu)
+    if phase in ("opening", "middlegame"):
+        score += pm["development"] * _development_score(board, w)
+
+    # Sécurité du roi
+    score += pm["king_safety"] * _king_safety_score(board, w)
+
+    # Mobilité
+    score += pm["mobility"] * _mobility_score(board, w)
+
+    # Structure de pions
+    score += pm["pawns"] * _pawn_structure_score(board, w)
+
+    # Échec
     if board.is_check():
-        score += 0.5 if board.turn == chess.BLACK else -0.5
+        score += w["ks_check_bonus"] if board.turn == chess.BLACK else -w["ks_check_bonus"]
 
+    # Activité du roi en finale
     if phase == "endgame":
-        bk = board.king(chess.BLACK)
-        wk = board.king(chess.WHITE)
-        if bk:
-            score += 0.1 * len(board.attacks(bk))
-        if wk:
-            score -= 0.1 * len(board.attacks(wk))
-
-    score += w["pawns"] * pawn_structure_score(board, chess.BLACK)
-    score -= w["pawns"] * pawn_structure_score(board, chess.WHITE)
+        score += _endgame_king_score(board, w)
 
     return score

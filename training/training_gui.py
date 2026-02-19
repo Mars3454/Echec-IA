@@ -1,5 +1,5 @@
 """
-training_gui.py — Interface d'entraînement pour la nouvelle IA python-chess.
+training_gui.py â€” Interface d'entraÃ®nement pour la nouvelle IA python-chess.
 """
 from __future__ import annotations
 import tkinter as tk
@@ -10,7 +10,7 @@ import sys
 import chess
 
 from chess_ai.engine_chess import GameState, initial_board, apply_move_inplace
-from chess_ai.ai import choose_best_move_timed
+from chess_ai.ai import choose_best_move_timed, set_active_weights
 from training.weights import *
 
 class TrainingThread(threading.Thread):
@@ -30,27 +30,27 @@ class TrainingThread(threading.Thread):
                 if not self.running: break
                 while self.paused and self.running: time.sleep(0.1)
                 if not self.running: break
-                app.update_log(f"[Génération {gen}] Itération {it}/{app.max_iterations}")
+                app.update_log(f"[GÃ©nÃ©ration {gen}] ItÃ©ration {it}/{app.max_iterations}")
                 cand=self._mutate(best, app.mutation_step)
                 wr, stats=self._eval_match(best, cand)
                 ok = wr>=(0.5+app.accept_margin)
                 if ok:
                     gen+=1; app.current_generation=gen; best=cand.copy(); app.best_weights=best.copy()
                     p=gen_path(gen); save_gen(p,gen,best,name=f"gen_{gen}"); set_best(p)
-                    app.update_log(f"  ✅ ACCEPTÉ WR={wr:.1%} → Gen {gen}")
+                    app.update_log(f"  âœ… ACCEPTÃ‰ WR={wr:.1%} â†’ Gen {gen}")
                 else:
-                    app.update_log(f"  ❌ Rejeté WR={wr:.1%}")
+                    app.update_log(f"  âŒ RejetÃ© WR={wr:.1%}")
                 app.add_training_stats({"iteration":it,"generation":gen,"winrate":wr,"accepted":ok,**stats})
                 app.update_progress(it, app.max_iterations)
-            app.update_log(f"\n🎉 Terminé ! Meilleure génération : {gen}")
+            app.update_log(f"\nðŸŽ‰ TerminÃ© ! Meilleure gÃ©nÃ©ration : {gen}")
             app.training_finished()
         except Exception as e:
-            app.update_log(f"\n❌ Erreur : {e}"); app.training_finished()
+            app.update_log(f"\nâŒ Erreur : {e}"); app.training_finished()
 
     def _run_match(self):
         app=self.app
         try:
-            app.update_log(f"🎮 Match : {app.match_games} parties  A={app.match_weights_a_name}  B={app.match_weights_b_name}")
+            app.update_log(f"ðŸŽ® Match : {app.match_games} parties  A={app.match_weights_a_name}  B={app.match_weights_b_name}")
             wa=wb=draws=0
             for gn in range(1, app.match_games+1):
                 if not self.running: break
@@ -69,17 +69,39 @@ class TrainingThread(threading.Thread):
                     else: draws+=1; app.update_log("  Nulle")
                 app.update_log(f"  Score A={wa} B={wb} N={draws}")
                 app.update_progress(gn, app.match_games)
-            app.update_log(f"\n🏆 FINAL  A:{wa}  B:{wb}  Nulles:{draws}")
-            if wa>wb: app.update_log(f"🎉 {app.match_weights_a_name} gagne !")
-            elif wb>wa: app.update_log(f"🎉 {app.match_weights_b_name} gagne !")
-            else: app.update_log("🤝 Match nul !")
+            app.update_log(f"\nðŸ† FINAL  A:{wa}  B:{wb}  Nulles:{draws}")
+            if wa>wb: app.update_log(f"ðŸŽ‰ {app.match_weights_a_name} gagne !")
+            elif wb>wa: app.update_log(f"ðŸŽ‰ {app.match_weights_b_name} gagne !")
+            else: app.update_log("ðŸ¤ Match nul !")
             app.training_finished()
         except Exception as e:
-            app.update_log(f"\n❌ Erreur : {e}"); app.training_finished()
+            app.update_log(f"\nâŒ Erreur : {e}"); app.training_finished()
 
     def _mutate(self, w, step):
-        nw=dict(w); k=random.choice(list(nw.keys()))
-        nw[k]=max(0, float(nw[k])+random.choice([-step,step,-2*step,2*step])); return nw
+        """
+        Mutation intelligente :
+        - Choisit un groupe de paramètres (phase, pièces, pions…)
+        - Mute 1 à 3 paramètres du groupe avec amplitude variable
+        - Respecte les bornes WEIGHT_BOUNDS
+        """
+        nw = dict(w)
+
+        # Choisir un groupe aléatoire
+        group_name = random.choice(list(PARAM_GROUPS.keys()))
+        params = PARAM_GROUPS[group_name]
+
+        # Nombre de paramètres à muter dans ce groupe (1 à 3)
+        n_mut = random.randint(1, min(3, len(params)))
+        keys  = random.sample(params, n_mut)
+
+        for k in keys:
+            lo, hi = WEIGHT_BOUNDS.get(k, (-1e9, 1e9))
+            # Amplitude proportionnelle à l'échelle du paramètre
+            scale  = (hi - lo)
+            delta  = random.choice([-1, 1]) * random.uniform(0.02, 0.15) * scale * (step / 5.0)
+            nw[k]  = max(lo, min(hi, float(nw[k]) + delta))
+
+        return nw
 
     def _eval_match(self, best, cand):
         wins=draws=losses=0
@@ -99,17 +121,23 @@ class TrainingThread(threading.Thread):
         return (wins+0.5*draws)/total if total>0 else 0.5, {"wins":wins,"draws":draws,"losses":losses}
 
     def _play_game(self, ww, wb):
-        state=GameState(board=initial_board())
+        state = GameState(board=initial_board())
         for _ in range(self.app.max_plies):
-            b=state.get_board()
-            if b.is_game_over(): break
-            weights=ww if state.turn==1 else wb
-            res=choose_best_move_timed(b, movetime_ms=self.app.movetime_ms,
-                                       max_depth=self.app.search_depth, weights=weights)
-            if res.move is None: break
+            b = state.get_board()
+            if b.is_game_over():
+                break
+            weights = ww if state.turn == 1 else wb
+            # Injecter les poids actifs pour que evaluate_board les utilise
+            set_active_weights(weights)
+            res = choose_best_move_timed(b, movetime_ms=self.app.movetime_ms,
+                                         max_depth=self.app.search_depth,
+                                         weights=weights)
+            if res.move is None:
+                break
             apply_move_inplace(state, res.move)
-        b=state.get_board()
-        if b.is_checkmate(): return -1 if b.turn==chess.WHITE else 1
+        b = state.get_board()
+        if b.is_checkmate():
+            return -1 if b.turn == chess.WHITE else 1
         return 0
 
     def stop(self): self.running=False
@@ -119,7 +147,7 @@ class TrainingThread(threading.Thread):
 
 class TrainingGUI:
     def __init__(self, root):
-        self.root=root; self.root.title("🎯 Entraînement IA — python-chess"); self.root.geometry("1000x700")
+        self.root=root; self.root.title("ðŸŽ¯ EntraÃ®nement IA â€” python-chess"); self.root.geometry("1000x700")
         self.training_thread=None; self.is_training=False; self.is_paused=False; self.current_mode=None
         self.current_generation=0; self.best_weights=DEFAULT_WEIGHTS.copy()
         self.max_iterations=50; self.games_per_eval=10; self.movetime_ms=50
@@ -136,19 +164,19 @@ class TrainingGUI:
 
     def _build_interface(self):
         nb=ttk.Notebook(self.root); nb.pack(fill="both",expand=True,padx=5,pady=5)
-        t1=ttk.Frame(nb); nb.add(t1,text="🎓 Entraînement")
-        t2=ttk.Frame(nb); nb.add(t2,text="⚔️ Match")
-        t3=ttk.Frame(nb); nb.add(t3,text="📊 Statistiques")
+        t1=ttk.Frame(nb); nb.add(t1,text="ðŸŽ“ EntraÃ®nement")
+        t2=ttk.Frame(nb); nb.add(t2,text="âš”ï¸ Match")
+        t3=ttk.Frame(nb); nb.add(t3,text="ðŸ“Š Statistiques")
         self._build_training_tab(t1); self._build_match_tab(t2); self._build_stats_tab(t3)
 
     def _build_training_tab(self, parent):
-        left=ttk.LabelFrame(parent,text="⚙️ Configuration",padding=10); left.pack(side="left",fill="both",padx=5,pady=5)
-        ttk.Label(left,text="Génération actuelle:",font=("Helvetica",10,"bold")).pack(anchor="w")
-        self.gen_label=ttk.Label(left,text=f"Génération {self.current_generation}",font=("Helvetica",12),foreground="blue"); self.gen_label.pack(anchor="w")
+        left=ttk.LabelFrame(parent,text="âš™ï¸ Configuration",padding=10); left.pack(side="left",fill="both",padx=5,pady=5)
+        ttk.Label(left,text="GÃ©nÃ©ration actuelle:",font=("Helvetica",10,"bold")).pack(anchor="w")
+        self.gen_label=ttk.Label(left,text=f"GÃ©nÃ©ration {self.current_generation}",font=("Helvetica",12),foreground="blue"); self.gen_label.pack(anchor="w")
         ttk.Separator(left,orient="horizontal").pack(fill="x",pady=10)
         pf=ttk.Frame(left); pf.pack(fill="x")
-        rows=[("Itérations max:","iterations_var",self.max_iterations,1,1000),
-              ("Parties/éval:","games_eval_var",self.games_per_eval,2,100),
+        rows=[("ItÃ©rations max:","iterations_var",self.max_iterations,1,1000),
+              ("Parties/Ã©val:","games_eval_var",self.games_per_eval,2,100),
               ("Temps/coup (ms):","movetime_var",self.movetime_ms,10,1000),
               ("Profondeur:","depth_var",self.search_depth,1,6),
               ("Coups max/partie:","plies_var",self.max_plies,50,500),
@@ -162,44 +190,44 @@ class TrainingGUI:
         ttk.Spinbox(pf,from_=0.0,to=0.2,increment=0.01,textvariable=self.margin_var,width=10).grid(row=len(rows),column=1,pady=2)
         ttk.Separator(left,orient="horizontal").pack(fill="x",pady=10)
         cf=ttk.Frame(left); cf.pack(fill="x",pady=10)
-        self.start_btn=ttk.Button(cf,text="▶️ Démarrer",command=self.start_training); self.start_btn.pack(fill="x",pady=2)
-        self.pause_btn=ttk.Button(cf,text="⏸️ Pause",command=self.pause_training,state="disabled"); self.pause_btn.pack(fill="x",pady=2)
-        self.stop_btn=ttk.Button(cf,text="⏹️ Arrêter",command=self.stop_training,state="disabled"); self.stop_btn.pack(fill="x",pady=2)
+        self.start_btn=ttk.Button(cf,text="â–¶ï¸ DÃ©marrer",command=self.start_training); self.start_btn.pack(fill="x",pady=2)
+        self.pause_btn=ttk.Button(cf,text="â¸ï¸ Pause",command=self.pause_training,state="disabled"); self.pause_btn.pack(fill="x",pady=2)
+        self.stop_btn=ttk.Button(cf,text="â¹ï¸ ArrÃªter",command=self.stop_training,state="disabled"); self.stop_btn.pack(fill="x",pady=2)
         right=ttk.Frame(parent); right.pack(side="right",fill="both",expand=True,padx=5,pady=5)
-        prgf=ttk.LabelFrame(right,text="📈 Progression",padding=5); prgf.pack(fill="x",pady=5)
+        prgf=ttk.LabelFrame(right,text="ðŸ“ˆ Progression",padding=5); prgf.pack(fill="x",pady=5)
         self.progress_var=tk.DoubleVar(value=0)
         ttk.Progressbar(prgf,variable=self.progress_var,maximum=100).pack(fill="x",pady=2)
         self.progress_label=ttk.Label(prgf,text="0 / 0"); self.progress_label.pack()
-        logf=ttk.LabelFrame(right,text="📝 Journal",padding=5); logf.pack(fill="both",expand=True,pady=5)
+        logf=ttk.LabelFrame(right,text="ðŸ“ Journal",padding=5); logf.pack(fill="both",expand=True,pady=5)
         sb=ttk.Scrollbar(logf); sb.pack(side="right",fill="y")
         self.log_text=tk.Text(logf,height=20,yscrollcommand=sb.set,font=("Courier",9)); self.log_text.pack(side="left",fill="both",expand=True)
         sb.config(command=self.log_text.yview)
-        self.update_log("Prêt."); self.update_log(f"Génération actuelle : {self.current_generation}")
+        self.update_log("PrÃªt."); self.update_log(f"GÃ©nÃ©ration actuelle : {self.current_generation}")
 
     def _build_match_tab(self, parent):
-        cf=ttk.LabelFrame(parent,text="⚙️ Configuration du Match",padding=10); cf.pack(fill="x",padx=5,pady=5)
+        cf=ttk.LabelFrame(parent,text="âš™ï¸ Configuration du Match",padding=10); cf.pack(fill="x",padx=5,pady=5)
         gf=ttk.Frame(cf); gf.pack(fill="x",pady=5)
         ttk.Label(gf,text="Nombre de parties:").pack(side="left")
         self.match_games_var=tk.IntVar(value=self.match_games)
         ttk.Spinbox(gf,from_=2,to=200,textvariable=self.match_games_var,width=10).pack(side="left",padx=5)
         ttk.Separator(cf,orient="horizontal").pack(fill="x",pady=10)
         wf=ttk.Frame(cf); wf.pack(fill="x",pady=5)
-        for side,color in [("a","🔵 Poids A"),("b","🔴 Poids B")]:
+        for side,color in [("a","ðŸ”µ Poids A"),("b","ðŸ”´ Poids B")]:
             frm=ttk.LabelFrame(wf,text=color,padding=5); frm.pack(side="left",fill="both",expand=True,padx=5)
-            lbl=ttk.Label(frm,text="Poids par défaut",font=("Helvetica",10)); lbl.pack(pady=5)
+            lbl=ttk.Label(frm,text="Poids par dÃ©faut",font=("Helvetica",10)); lbl.pack(pady=5)
             setattr(self,f"weights_{side}_label",lbl)
-            ttk.Button(frm,text="📂 Charger",command=lambda s=side:self.load_weights(s)).pack(fill="x",pady=2)
-            ttk.Button(frm,text="🎯 Meilleure gen.",command=lambda s=side:self.use_best_weights(s)).pack(fill="x",pady=2)
-            ttk.Button(frm,text="📋 Gen. spécifique",command=lambda s=side:self.use_generation(s)).pack(fill="x",pady=2)
+            ttk.Button(frm,text="ðŸ“‚ Charger",command=lambda s=side:self.load_weights(s)).pack(fill="x",pady=2)
+            ttk.Button(frm,text="ðŸŽ¯ Meilleure gen.",command=lambda s=side:self.use_best_weights(s)).pack(fill="x",pady=2)
+            ttk.Button(frm,text="ðŸ“‹ Gen. spÃ©cifique",command=lambda s=side:self.use_generation(s)).pack(fill="x",pady=2)
         ttk.Separator(cf,orient="horizontal").pack(fill="x",pady=10)
-        self.start_match_btn=ttk.Button(cf,text="⚔️ Démarrer le Match",command=self.start_match); self.start_match_btn.pack(fill="x",pady=5)
-        logf=ttk.LabelFrame(parent,text="📝 Journal du Match",padding=5); logf.pack(fill="both",expand=True,padx=5,pady=5)
+        self.start_match_btn=ttk.Button(cf,text="âš”ï¸ DÃ©marrer le Match",command=self.start_match); self.start_match_btn.pack(fill="x",pady=5)
+        logf=ttk.LabelFrame(parent,text="ðŸ“ Journal du Match",padding=5); logf.pack(fill="both",expand=True,padx=5,pady=5)
         sb=ttk.Scrollbar(logf); sb.pack(side="right",fill="y")
         self.match_log_text=tk.Text(logf,height=15,yscrollcommand=sb.set,font=("Courier",9)); self.match_log_text.pack(side="left",fill="both",expand=True)
         sb.config(command=self.match_log_text.yview)
 
     def _build_stats_tab(self, parent):
-        ttk.Label(parent,text="📊 Statistiques",font=("Helvetica",14,"bold")).pack(pady=10)
+        ttk.Label(parent,text="ðŸ“Š Statistiques",font=("Helvetica",14,"bold")).pack(pady=10)
         sf=ttk.Frame(parent); sf.pack(fill="both",expand=True,padx=10,pady=10)
         sb=ttk.Scrollbar(sf); sb.pack(side="right",fill="y")
         self.stats_text=tk.Text(sf,yscrollcommand=sb.set,font=("Courier",10)); self.stats_text.pack(side="left",fill="both",expand=True)
@@ -213,7 +241,7 @@ class TrainingGUI:
         self.accept_margin=float(self.margin_var.get())
         self.is_training=True; self.current_mode="training"
         self.start_btn.config(state="disabled"); self.pause_btn.config(state="normal"); self.stop_btn.config(state="normal")
-        self.update_log(f"\n{'='*40}\n🚀 ENTRAÎNEMENT\n{'='*40}")
+        self.update_log(f"\n{'='*40}\nðŸš€ ENTRAÃŽNEMENT\n{'='*40}")
         self.training_thread=TrainingThread(self,"training"); self.training_thread.start()
 
     def start_match(self):
@@ -225,9 +253,9 @@ class TrainingGUI:
     def pause_training(self):
         if not self.training_thread: return
         if self.is_paused:
-            self.training_thread.resume(); self.pause_btn.config(text="⏸️ Pause"); self.is_paused=False
+            self.training_thread.resume(); self.pause_btn.config(text="â¸ï¸ Pause"); self.is_paused=False
         else:
-            self.training_thread.pause(); self.pause_btn.config(text="▶️ Reprendre"); self.is_paused=True
+            self.training_thread.pause(); self.pause_btn.config(text="â–¶ï¸ Reprendre"); self.is_paused=True
 
     def stop_training(self):
         if self.training_thread: self.training_thread.stop()
@@ -236,9 +264,9 @@ class TrainingGUI:
         self.is_training=False; self.is_paused=False; self.root.after(0,self._finish_ui)
 
     def _finish_ui(self):
-        self.start_btn.config(state="normal"); self.pause_btn.config(state="disabled",text="⏸️ Pause")
+        self.start_btn.config(state="normal"); self.pause_btn.config(state="disabled",text="â¸ï¸ Pause")
         self.stop_btn.config(state="disabled"); self.start_match_btn.config(state="normal")
-        self.gen_label.config(text=f"Génération {self.current_generation}"); self.update_stats_display()
+        self.gen_label.config(text=f"GÃ©nÃ©ration {self.current_generation}"); self.update_stats_display()
 
     def update_log(self, msg):
         def _u():
@@ -256,11 +284,11 @@ class TrainingGUI:
     def update_stats_display(self):
         self.stats_text.delete(1.0,tk.END)
         if not self.training_history:
-            self.stats_text.insert(tk.END,"Aucune statistique.\nLancez un entraînement."); return
+            self.stats_text.insert(tk.END,"Aucune statistique.\nLancez un entraÃ®nement."); return
         total=len(self.training_history); acc=sum(1 for s in self.training_history if s["accepted"])
-        self.stats_text.insert(tk.END,f"📊 STATISTIQUES\n{'='*40}\n\nItérations : {total}\nAcceptés : {acc}\nTaux : {acc/total*100:.1f}%\n\n{'='*40}\nDERNIÈRES ITÉRATIONS\n{'='*40}\n\n")
+        self.stats_text.insert(tk.END,f"ðŸ“Š STATISTIQUES\n{'='*40}\n\nItÃ©rations : {total}\nAcceptÃ©s : {acc}\nTaux : {acc/total*100:.1f}%\n\n{'='*40}\nDERNIÃˆRES ITÃ‰RATIONS\n{'='*40}\n\n")
         for s in self.training_history[-20:]:
-            st="✅" if s["accepted"] else "❌"
+            st="âœ…" if s["accepted"] else "âŒ"
             self.stats_text.insert(tk.END,f"#{s['iteration']:3d} Gen{s['generation']:2d} WR:{s['winrate']:5.1%} {st} ({s['wins']}/{s['wins']+s['draws']+s['losses']})\n")
 
     def load_weights(self, side):
@@ -281,8 +309,8 @@ class TrainingGUI:
         except Exception as e: messagebox.showerror("Erreur",str(e))
 
     def use_generation(self, side):
-        win=tk.Toplevel(self.root); win.title(f"Génération {side.upper()}"); win.geometry("300x150")
-        ttk.Label(win,text="Numéro:").pack(pady=10)
+        win=tk.Toplevel(self.root); win.title(f"GÃ©nÃ©ration {side.upper()}"); win.geometry("300x150")
+        ttk.Label(win,text="NumÃ©ro:").pack(pady=10)
         gv=tk.IntVar(value=0)
         ttk.Spinbox(win,from_=0,to=self.current_generation,textvariable=gv,width=10).pack(pady=5)
         def load():
