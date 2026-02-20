@@ -1,10 +1,25 @@
 """
-evalu.py - Heuristique d'évaluation entièrement pilotée par les poids entraînables.
+commentaire général du fichier : 
+Le fichier evalu.py contient la fonction d’évaluation du moteur
+Son rôle est d’attribuer un score à une position d’échecs
+Convention importante :
+Score positif = avantage pour les NOIRS
+L’évaluation dépend de plusieurs critères :
+-	Matériel
+-	Contrôle du centre
+-	Développement
+-	Sécurité du roi
+-	Mobilité
+-	Structure des pions
+-	Activité du roi en finale
+Toutes les valeurs numériques proviennent d’un dictionnaire weights, ce qui permet d’entraîner le moteur
 
-Toutes les constantes numériques proviennent du dict `weights` passé en paramètre.
-Si weights=None, on utilise DEFAULT_WEIGHTS (mode normal sans entraînement).
+variables : 
 
-Point de vue : score positif = bon pour les NOIRS (convention héritée du code original).
+-	CENTER_MAIN : cases centrales principales.
+-	CENTER_EXT : cases du centre élargi.
+-	_PIECE_VALUES_CACHE : cache pour stocker les valeurs des pièces déjà construites.
+
 """
 
 import chess
@@ -25,7 +40,9 @@ _PIECE_VALUES_CACHE: Dict[str, dict] = {}
 
 
 def _get_piece_values(w: Dict[str, float]) -> dict:
-    """Construit le dict pièce→valeur depuis les poids."""
+    """Construit le dict pièce→valeur depuis les poids
+    Utilise un cache pour éviter de le recalculer à chaque appel"""
+
     key = f"{w['pv_pawn']},{w['pv_knight']},{w['pv_bishop']},{w['pv_rook']},{w['pv_queen']}"
     if key not in _PIECE_VALUES_CACHE:
         _PIECE_VALUES_CACHE[key] = {
@@ -44,6 +61,12 @@ def _get_piece_values(w: Dict[str, float]) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def game_phase(board: chess.Board, w: Dict[str, float]) -> str:
+    """Détermine la phase de la partie :
+-	opening (ouverture)
+-	middlegame (milieu de jeu)
+-	endgame (finale)
+Elle se base sur le matériel restant
+"""
     material = 0
     for p in [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]:
         material += len(board.pieces(p, chess.WHITE))
@@ -61,14 +84,19 @@ def game_phase(board: chess.Board, w: Dict[str, float]) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _material_score(board: chess.Board, pv: dict) -> float:
-    """Score matériel brut (noir - blanc)."""
+    """Calcule la différence de matériel :
+score = matériel_noir - matériel_blanc
+"""
     black = sum(len(board.pieces(p, chess.BLACK)) * pv[p] for p in pv)
     white = sum(len(board.pieces(p, chess.WHITE)) * pv[p] for p in pv)
     return black - white
 
 
 def _center_score(board: chess.Board, w: Dict[str, float]) -> float:
-    """Contrôle du centre (principal + étendu)."""
+    """Évalue le contrôle du centre :
+            -	Centre principal (D4, E4, D5, E5)
+            -	Centre élargi
+"""
     main_black = sum(board.is_attacked_by(chess.BLACK, sq) for sq in CENTER_MAIN)
     main_white = sum(board.is_attacked_by(chess.WHITE, sq) for sq in CENTER_MAIN)
     ext_black  = sum(board.is_attacked_by(chess.BLACK, sq) for sq in CENTER_EXT)
@@ -78,9 +106,12 @@ def _center_score(board: chess.Board, w: Dict[str, float]) -> float:
 
 
 def _development_score(board: chess.Board, w: Dict[str, float]) -> float:
-    """Développement en ouverture : cavaliers et fous hors de leur case initiale."""
-    # Nombre de pièces mineures développées (pas sur la rangée de départ)
+    """Mesure le développement des pièces mineures
+       Compte les cavaliers et fous qui ont quitté leur rangée initiale
+"""
+
     def developed(color):
+        """ Nombre de pièces mineures développées (pas sur la rangée de départ)"""
         count = 0
         back_rank = 0 if color == chess.WHITE else 7
         for pt in [chess.KNIGHT, chess.BISHOP]:
@@ -92,8 +123,14 @@ def _development_score(board: chess.Board, w: Dict[str, float]) -> float:
 
 
 def _king_safety_score(board: chess.Board, w: Dict[str, float]) -> float:
-    """Sécurité du roi."""
+    """Évalue la sécurité du roi :
+                -	Cases attaquées autour du roi
+                -	Bonus si le roque est encore possible
+"""
     def safety(color):
+        """La fonction safety évalue la sécurité du roi pour une couleur donnée
+          Elle mesure à quel point le roi est protégé ou exposé dans la position"""
+
         king = board.king(color)
         if king is None:
             return -5.0
@@ -108,7 +145,9 @@ def _king_safety_score(board: chess.Board, w: Dict[str, float]) -> float:
 
 
 def _mobility_score(board: chess.Board, w: Dict[str, float]) -> float:
-    """Mobilité : nombre de coups légaux disponibles."""
+    """Compare le nombre de coups légaux disponibles pour chaque camp.
+        Plus un joueur a de mobilité, plus sa position est dynamique.
+        """
     saved_turn = board.turn
 
     board.turn = chess.BLACK
@@ -122,8 +161,15 @@ def _mobility_score(board: chess.Board, w: Dict[str, float]) -> float:
 
 
 def _pawn_structure_score(board: chess.Board, w: Dict[str, float]) -> float:
-    """Structure de pions : doublés, isolés, passés."""
+    """Analyse la structure des pions :
+                        -	Pions doublés (pénalité)
+                        -	Pions isolés (pénalité)
+                        -	Pions passés (bonus)
+                        -	Avancement des pions passés
+"""
     def score_for(color):
+        """La fonction score_for sert à évaluer la structure des pions pour une couleur donnée (blanc ou noir)
+          Elle analyse plusieurs éléments stratégiques importants"""
         s = 0.0
         pawns = board.pieces(chess.PAWN, color)
         opp   = not color
@@ -173,7 +219,8 @@ def _pawn_structure_score(board: chess.Board, w: Dict[str, float]) -> float:
 
 
 def _endgame_king_score(board: chess.Board, w: Dict[str, float]) -> float:
-    """En finale : activité et centralisation du roi."""
+    """En finale : évalue l'activité et  la centralisation du roi."""
+
     def king_score(color):
         king = board.king(color)
         if king is None:
@@ -197,7 +244,14 @@ def _endgame_king_score(board: chess.Board, w: Dict[str, float]) -> float:
 def evaluate_board(board: chess.Board,
                    weights: Optional[Dict[str, float]] = None) -> float:
     """
-    Évalue la position.
+    Fonction principale d’évaluation.
+    Étapes :
+            1.	Vérifie les cas terminaux (mat, pat)
+            2.	Détermine la phase
+            3.	Sélectionne les multiplicateurs adaptés
+            4.	Combine tous les sous-scores
+            5.	Retourne le score final
+
     Score positif = bon pour les NOIRS.
     weights=None → utilise DEFAULT_WEIGHTS.
     """
