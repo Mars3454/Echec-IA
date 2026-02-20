@@ -1,26 +1,29 @@
 """
+commentaire général du fichier : 
 engine_chess.py — Couche d'adaptation python-chess ↔ GUI existant.
 
-Remplace engine.py en exposant exactement les mêmes noms/signatures
-que l'ancien engine.py, mais en s'appuyant sur python-chess en coulisse.
+Son rôle est de permettre au GUI d’utiliser exactement la même interface que l’ancien moteur, 
+tout en utilisant la bibliothèque python-chess en arrière-plan
 
-Interfaces exposées (identiques à l'ancien engine.py) :
-    GameState
-    initial_board()
-    piece_symbol(piece)
-    legal_moves(state)
-    apply_move_inplace(state, move)
-    make_move(state, move)
-    is_checkmate(state)
-    is_stalemate(state)
-    in_check(state, color)
-    move_to_uci(move)
-    uci_to_move(state, uci)
-    state_to_fen(state)
-    fen_to_state(fen)
+Il convertit :
+-	Les coups internes (chess.Move) vers un format compatible GUI
+-	Les états du jeu
+-	Les notations UCI
+-	Les positions FEN
+-	Les pièces en symboles Unicode
 
-    Move  (dataclass compatible)
-    PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING  (constantes)
+Ce fichier ne contient pas d’intelligence artificielle
+Il sert uniquement à adapter les données entre deux systèmes
+
+variables : 
+-	PAWN : constante représentant un pion.
+-	KNIGHT : constante représentant un cavalier.
+-	BISHOP : constante représentant un fou.
+-	ROOK : constante représentant une tour.
+-	QUEEN : constante représentant une dame.
+-	KING : constante représentant un roi.
+-	_SYMBOLS : dictionnaire associant une pièce et sa couleur à son symbole Unicode.
+
 """
 
 from __future__ import annotations
@@ -59,11 +62,13 @@ _SYMBOLS = {
 
 def piece_symbol(piece) -> str:
     """
+    Retourne le symbole Unicode correspondant à une pièce
     Accepte :
       - None / 0      → espace
       - chess.Piece   → symbole unicode
       - int signé     → (ancien engine.py) converti automatiquement
-    """
+    Elle convertit correctement la pièce vers son symbole graphique    """
+
     if piece is None or piece == 0:
         return " "
     if isinstance(piece, chess.Piece):
@@ -81,8 +86,18 @@ def piece_symbol(piece) -> str:
 @dataclass(frozen=True)
 class Move:
     """
-    Enveloppe chess.Move pour compatibilité avec le GUI.
-    Le GUI utilise : move.sr, .sc, .er, .ec, .promotion, .is_en_passant, .is_castling
+    Représente un coup compatible avec le GUI
+    Enveloppe chess.Move pour compatibilité avec le GUI
+    Attribut : 
+
+             -	sr : ligne de départ
+        -	sc : colonne de départ
+        -	er : ligne d’arrivée
+        -	ec : colonne d’arrivée
+        -	promotion : type de promotion (si applicable)
+        -	is_en_passant : indique si le coup est une prise en passant
+        -	is_castling : indique si le coup est un roque
+        -	_chess_move : objet chess.Move interne
     """
     sr: int
     sc: int
@@ -94,8 +109,17 @@ class Move:
     _chess_move: Optional[chess.Move] = field(default=None, compare=False, hash=False)
 
     @staticmethod
-    def from_chess(cm: chess.Move, board: chess.Board) -> "Move":
-        """Construit un Move depuis un chess.Move en lisant le plateau."""
+    def from_chess(cm: chess.Move, board: chess.Board) -> "Move": 
+
+        """Construit un objet  Move depuis un chess.Move en lisant le plateau
+            Elle :
+                    -	Convertit les coordonnées internes
+                    -	Détecte les promotions
+                    -	Détecte les roques
+                    -	Détecte les prises en passant 
+
+"""
+
         sr = 7 - chess.square_rank(cm.from_square)
         sc = chess.square_file(cm.from_square)
         er = 7 - chess.square_rank(cm.to_square)
@@ -112,7 +136,11 @@ class Move:
                     _chess_move=cm)
 
     def to_chess(self) -> chess.Move:
-        """Retourne le chess.Move sous-jacent."""
+
+        """Convertit un objet Move en objet chess.Move
+            Permet au moteur interne de comprendre le coup sélectionné par le GUI
+"""
+
         if self._chess_move is not None:
             return self._chess_move
         from_sq = chess.square(self.sc, 7 - self.sr)
@@ -127,9 +155,9 @@ class GameState:
     Enveloppe chess.Board pour compatibilité avec le GUI existant.
 
     Le GUI accède à :
-        state.board[r][c]      → int signé (>0 blanc, <0 noir, 0 vide)
-        state.turn             → 1 (blancs) ou -1 (noirs)
-        state.move_history     → list[str] UCI
+        board[r][c]      → int signé (>0 blanc, <0 noir, 0 vide)
+        turn             → 1 (blancs) ou -1 (noirs)
+        move_history     → list[str] UCI ( liste des coups joués)
     """
 
     def __init__(self, board: Optional[chess.Board] = None, turn: int = 1):
@@ -148,7 +176,7 @@ class GameState:
 
     @property
     def board(self) -> List[List[int]]:
-        """Grille 8×8 d'entiers signés (>0 blanc, <0 noir, 0 vide)."""
+        """Construit dynamiquement une grille 8×8 à partir du plateau interne"""
         grid = [[0] * 8 for _ in range(8)]
         for sq in chess.SQUARES:
             piece = self._board.piece_at(sq)
@@ -161,27 +189,33 @@ class GameState:
 
     @property
     def turn(self) -> int:
+        """Retourne le joueur actif sous forme 1 ou -1"""
         return 1 if self._board.turn == chess.WHITE else -1
 
     @turn.setter
     def turn(self, value: int):
+        """Retourne le joueur actif sous forme 1 ou -1"""
         self._board.turn = chess.WHITE if value == 1 else chess.BLACK
 
     @property
     def move_history(self) -> List[str]:
+        """Retourne la liste des coups joués"""
         return self._move_history
 
     # ---- Accès au plateau sous-jacent ----
 
     def get_board(self) -> chess.Board:
+        """Retourne l’objet chess.Board interne"""
         return self._board
 
     def copy(self) -> "GameState":
+        """Crée une copie complète de l’état du jeu."""
         ns = GameState(board=self._board.copy())
         ns._move_history = list(self._move_history)
         return ns
 
     def king_pos(self, color: int) -> Tuple[int, int]:
+        """Retourne la position du roi d’une couleur donnée."""
         chess_color = chess.WHITE if color == 1 else chess.BLACK
         sq = self._board.king(chess_color)
         if sq is None:
@@ -235,20 +269,24 @@ def make_move(state: GameState, move) -> GameState:
 
 
 def is_checkmate(state: GameState) -> bool:
+    """Retourne True si la position est un mat."""
     return state.get_board().is_checkmate()
 
 
 def is_stalemate(state: GameState) -> bool:
+    """Retourne True si la position est un pat."""
     return state.get_board().is_stalemate()
 
 
 def in_check(state: GameState, color: int) -> bool:
+    """Vérifie si une couleur donnée est en échec."""
     b = state.get_board()
     chess_color = chess.WHITE if color == 1 else chess.BLACK
     return b.is_check() and b.turn == chess_color
 
 
 def has_legal_moves(state: GameState) -> bool:
+    """Vérifie s’il existe au moins un coup légal."""
     return bool(list(state.get_board().legal_moves))
 
 
@@ -276,9 +314,11 @@ def uci_to_move(state: GameState, uci: str) -> Move:
 # ==================== FEN ====================
 
 def state_to_fen(state: GameState) -> str:
+    """Convertit un état en notation FEN."""
     return state.get_board().fen()
 
 
 def fen_to_state(fen: str) -> GameState:
+    """Crée un GameState à partir d’une chaîne FEN."""
     b = chess.Board(fen)
     return GameState(board=b)
