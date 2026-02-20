@@ -1,5 +1,13 @@
 """
-uci.py - Serveur UCI minimal (suffisant pour lichess-bot / cutechess).
+commentaire général du fichier :  
+Ce fichier implémente le protocole UCI (Universal Chess Interface), 
+le standard de communication entre un moteur d'échecs
+ et une interface externe comme Lichess-bot ou CuteChess 
+Il lit les commandes sur l'entrée standard (stdin) et répond avec les coups calculés
+ C'est ce fichier qui permet d'utiliser l'IA dans un contexte compétitif en ligne ou contre d'autres moteurs,
+ indépendamment de l'interface graphique
+
+uci.py - Serveur UCI minimal .
 Supporte:
 - uci / isready / ucinewgame / quit
 - position startpos moves ...
@@ -7,6 +15,18 @@ Supporte:
 - go depth N
 - go movetime MS   (iterative deepening approx)
 Répond par: bestmove <uci>
+
+variables : 
+ENGINE_NAME :	Nom du moteur envoyé à l'interface UCI ("ChessTkAI")
+ENGINE_AUTHOR :	Nom de l'auteur envoyé à l'interface UCI
+state :	État courant de la partie dans la boucle UCI, réinitialisé à chaque ucinewgame
+depth :	Profondeur de recherche extraite de la commande go depth N
+movetime :	Temps maximum en ms extrait de la commande go movetime MS
+parts:	Découpage d'une commande en liste de mots pour en extraire les paramètres
+st :	État de jeu temporaire construit dans _parse_position
+fen_fields: 	Les 6 champs du FEN extraits de la commande position fen ...
+
+
 """
 
 from __future__ import annotations
@@ -20,6 +40,12 @@ ENGINE_NAME = "ChessTkAI"
 ENGINE_AUTHOR = "Valerie + ChatGPT"
 
 def _parse_position(cmd: str) -> GameState:
+    """Analyse la commande position reçue
+    Supporte deux formes : startpos (position initiale) et
+      fen <FEN> (position arbitraire) Dans les deux cas,
+        rejoue ensuite les coups listés après moves pour 
+        reconstruire l'état exact de la partie
+      Retourne un GameState prêt à l'emploi"""
     parts = cmd.split()
     # position startpos [moves ...]
     if "startpos" in parts:
@@ -47,7 +73,13 @@ def _parse_position(cmd: str) -> GameState:
 
     raise ValueError("position: format non supporté.")
 
-def uci_loop():
+def uci_loop(): 
+    """Boucle principale du serveur UCI. Lit les commandes une par une et y répond selon le protocole
+      Gère uci (envoie les infos du moteur et uciok), isready (répond readyok), 
+      ucinewgame (remet le plateau à zéro), position (reconstruit l'état via _parse_position),
+        go (lance le calcul et répond bestmove <uci>),
+       d (debug : affiche le FEN actuel), et quit (quitte la boucle)"""
+    
     state = GameState(board=initial_board(), turn=1)
 
     while True:
@@ -114,7 +146,8 @@ def uci_loop():
                 # on accepte mais on ignore (minimal)
                 pass
 
-def main():
+def main(): 
+    """Point d'entrée : appelle simplement uci_loop()"""
     uci_loop()
 
 if __name__ == "__main__":
