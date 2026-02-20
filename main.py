@@ -10,7 +10,7 @@ Affiche :
 - Statistiques (nœuds, temps, nœuds/sec)
 - Barre d'évaluation visuelle
 """
-
+"""Mettre la profondeur  4 pour un jeu optimal tout en restant autour de 40s de coup"""
 import tkinter as tk
 import sys
 import os
