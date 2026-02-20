@@ -1,14 +1,8 @@
 {
-  "stockfish_path": "E:\\\\val\\\\ECHEC\\\\chess_tk_ai_plus_step1\\\\stockfish.exe",
-  "start_elo": 1400,
-  "min_elo": 1320,
-  "max_elo": 2200,
-  "elo_step": 50,
-  "movetime_ms": 50,
-  "our_movetime_ms": 50,
-  "games_per_eval": 60,
+  "our_movetime_ms": 100,
+  "games_per_eval": 10,
   "max_game_plies": 160,
   "generations_per_run": 50,
-  "mutation_step": 3,
+  "mutation_strength": 1,
   "accept_margin": 0.02
 }

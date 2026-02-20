@@ -5,7 +5,12 @@ Modes disponibles:
 - 🎓 Entraînement: évolution automatique par générations
 - ⚔️ Match: comparer deux versions de poids
 """
-
+""" Pour un programme de 10h efficace, voici les parametres a apliqué : 
+- Nombre de générations : 100
+- Nombre de parties par génération : 20
+- Profondeur 4
+le reste laisser les parametre tel quel
+"""
 import tkinter as tk
 import sys
 import os
