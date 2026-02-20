@@ -1,5 +1,13 @@
 """
-training_gui.py - Interface d'entrainement pour la nouvelle IA python-chess.
+commentaire général du fichier : 
+Ce fichier fournit une interface graphique Tkinter 
+dédiée à l'entraînement de l'IA. Il permet de lancer des sessions 
+d'entraînement par évolution (mutation + sélection des meilleurs poids),
+ de faire jouer deux jeux de poids l'un contre l'autre en match, 
+ et de consulter les statistiques des sessions passées
+ L'interface est organisée en trois onglets : Entraînement, 
+ Match et Statistiques L'entraînement tourne dans un thread séparé 
+ pour ne pas bloquer l'interface graphique
 """
 from __future__ import annotations
 import tkinter as tk
@@ -14,8 +22,21 @@ from chess_ai.ai import choose_best_move_timed, set_active_weights
 from training.weights import *
 
 
-class TrainingThread(threading.Thread):
-    def __init__(self, app, mode):
+class TrainingThread(threading.Thread): 
+    """variables : 
+self.app ==	Référence à l'instance TrainingGUI, pour accéder aux paramètres et appeler les mises à jour d'interface
+self.mode ==	Mode du thread : "training" (entraînement) ou "match" (match libre)
+self.running ==	Booléen indiquant si le thread doit continuer à tourner
+self.paused == 	Booléen indiquant si le thread est en pause
+
+    """
+    def __init__(self, app, mode): 
+        """Constructeur. Initialise le thread avec une référence à 
+        l'application, le mode ("training" ou "match"), et 
+        les drapeaux running=True et paused=False
+          Le thread est créé en mode daemon=True :
+          il s'arrête automatiquement si la fenêtre est fermée"""
+        
         super().__init__(daemon=True)
         self.app = app
         self.mode = mode
@@ -23,12 +44,23 @@ class TrainingThread(threading.Thread):
         self.paused = False
 
     def run(self):
+        """Méthode exécutée au démarrage du thread
+        Redirige vers _run_training() ou _run_match() selon le mode choisi"""
         if self.mode == "training":
             self._run_training()
         else:
             self._run_match()
 
     def _run_training(self):
+        """Boucle principale d'entraînement. Pour chaque itération :
+        vérifie si le thread doit continuer ou est en pause,
+        mute les meilleurs poids avec _mutate,
+        évalue le candidat avec _eval_match, 
+        accepte ou rejette le candidat selon le winrate,
+        sauvegarde la nouvelle génération si acceptée, 
+        et met à jour l'interface (log, stats, barre de progression)
+        En cas d'exception, affiche l'erreur et signale la fin"""
+
         app = self.app
         try:
             gen = app.current_generation
@@ -67,6 +99,12 @@ class TrainingThread(threading.Thread):
             app.training_finished()
 
     def _run_match(self):
+
+        """Boucle principale de match libre. Fait jouer N parties entre 
+        les poids A et B en alternant les couleurs
+          (A=blancs sur les parties impaires, A=noirs sur les paires)
+        Affiche le score au fil des parties et annonce le vainqueur à la fin"""
+
         app = self.app
         try:
             app.update_log(
@@ -145,6 +183,11 @@ class TrainingThread(threading.Thread):
         return nw
 
     def _eval_match(self, best, cand):
+        """Évalue un candidat contre le champion sur games_per_eval parties, 
+        en alternant les couleurs. Calcule le winrate du candidat : 
+        (victoires + 0.5 × nulles) / total
+        Retourne le winrate et un dictionnaire {wins, draws, losses}"""
+
         wins = draws = losses = 0
         for i in range(self.app.games_per_eval):
             if not self.running:
@@ -164,6 +207,12 @@ class TrainingThread(threading.Thread):
         return wr, {"wins": wins, "draws": draws, "losses": losses}
 
     def _play_game(self, ww, wb):
+        """Joue une partie complète entre deux jeux de poids 
+        Injecte les poids actifs dans l'évaluateur à chaque coup via
+        set_active_weights S'arrête en cas de fin de partie
+        ou après max_plies demi-coups. Retourne +1 si les blancs gagnent,
+        -1 si les noirs gagnent, 0 pour toute nulle"""
+
         state = GameState(board=initial_board())
         for _ in range(self.app.max_plies):
             b = state.get_board()
@@ -186,13 +235,67 @@ class TrainingThread(threading.Thread):
             return -1 if b.turn == chess.WHITE else 1
         return 0
 
-    def stop(self):   self.running = False
-    def pause(self):  self.paused  = True
-    def resume(self): self.paused  = False
+    def stop(self):   
+        """termine la boucle d'entraînement au prochain tour"""
+        self.running = False  
+
+    def pause(self): 
+        """suspend la boucle via le while self.paused dans _run_training"""
+        self.paused  = True
+
+    def resume(self):
+        """relance la boucle"""
+        self.paused  = False
 
 
 class TrainingGUI:
-    def __init__(self, root):
+    """variables : 
+    self.root ==	Fenêtre principale Tkinter
+self.training_thread ==	Instance du TrainingThread en cours, None si aucun
+self.is_training ==	Booléen : un entraînement ou un match est-il en cours ?
+self.is_paused ==	Booléen : l'entraînement est-il en pause ?
+self.current_mode == 	Mode actif : "training" ou "match"
+self.current_generation ==	Numéro de la génération actuelle chargée depuis le disque
+self.best_weights ==	Dictionnaire des meilleurs poids actuels (champion)
+self.max_iterations== 	Nombre d'itérations max pour l'entraînement
+self.games_per_eval  ==	Nombre de parties jouées pour évaluer un candidat
+self.movetime_ms== 	Temps de réflexion en ms par coup pendant l'entraînement
+self.search_depth == 	Profondeur de recherche utilisée pendant les parties d'entraînement
+self.max_plies == 	Nombre maximum de demi-coups par partie avant de déclarer nulle
+self.mutation_step==	Intensité des mutations (facteur multiplicateur)
+self.accept_margin== 	 Marge au-dessus de 50% de winrate pour qu'un candidat soit accepté
+self.match_games ==	Nombre de parties pour un match libre
+self.match_weights_a ==	Poids du joueur A pour le match
+self.match_weights_b ==	Poids du joueur B pour le match
+self.match_weights_a_name ==	 Nom affiché pour les poids A
+self.match_weights_b_name ==	Nom affiché pour les poids B
+self.training_history ==	Liste de dictionnaires stockant les stats de chaque itération
+self.gen_label == 	Label affichant la génération actuelle dans l'onglet Entraînement
+self.log_text ==	Zone de texte scrollable du journal d'entraînement
+self.match_log_text	 ==Zone de texte scrollable du journal de match
+self.stats_text ==	Zone de texte scrollable de l'onglet Statistiques
+self.progress_var ==	Variable Tkinter liée à la barre de progression (0 à 100)
+self.progress_label ==	Label affichant "X / total" à côté de la barre
+self.start_btn ==	Bouton "Démarrer" l'entraînement
+self.pause_btn ==	Bouton "Pause" / "Reprendre"
+self.stop_btn ==	Bouton "Arrêter"
+self.start_match_btn ==	Bouton "Démarrer le Match"
+self.iterations_var ==	Variable Tkinter du spinbox "Iterations max"
+self.games_eval_var == 	Variable Tkinter du spinbox "Parties/eval"
+self.movetime_var == 	Variable Tkinter du spinbox "Temps/coup"
+self.depth_var ==	Variable Tkinter du spinbox "Profondeur"
+self.plies_var== 	Variable Tkinter du spinbox "Coups max/partie"
+self.mutation_var ==	Variable Tkinter du spinbox "Pas de mutation"
+self.margin_var ==	Variable Tkinter du spinbox "Marge accept"
+self.match_games_var ==	Variable Tkinter du spinbox "Nombre de parties" du match
+"""
+
+    def __init__(self, root): 
+        """Constructeur. Initialise toutes les variables de l'application 
+        (génération, poids, paramètres d'entraînement et de match, historique),
+          charge l'état actuel depuis le disque avec _load_current_state(), 
+        puis construit l'interface avec _build_interface()"""
+
         self.root = root
         self.root.title("Entrainement IA - python-chess")
         self.root.geometry("1000x700")
@@ -223,6 +326,11 @@ class TrainingGUI:
         self._build_interface()
 
     def _load_current_state(self):
+        """Appelle ensure_defaults() pour garantir l'existence des fichiers
+          de poids, puis charge l'index de la génération
+            la plus récente et les poids correspondants
+              En cas d'erreur de lecture, replie sur les poids par défaut""" 
+        
         ensure_defaults()
         self.current_generation = latest_generation_index()
         try:
@@ -230,7 +338,11 @@ class TrainingGUI:
         except Exception:
             self.best_weights = DEFAULT_WEIGHTS.copy()
 
-    def _build_interface(self):
+    def _build_interface(self): 
+        """Crée un Notebook Tkinter (onglets) avec trois onglets :
+          "Entraînement", "Match" et "Statistiques", 
+        et délègue la construction de chacun aux méthodes dédiées"""
+
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=5, pady=5)
         t1 = ttk.Frame(nb); nb.add(t1, text="Entrainement")
@@ -241,6 +353,12 @@ class TrainingGUI:
         self._build_stats_tab(t3)
 
     def _build_training_tab(self, parent):
+        """Construit l'onglet Entraînement. Colonne gauche :
+          label de génération, spinboxes de configuration
+            (itérations, parties, temps, profondeur, coups max, mutation,
+              marge), boutons Démarrer/Pause/Arrêter. 
+        Colonne droite : barre de progression et zone de journal scrollable"""
+
         left = ttk.LabelFrame(parent, text="Configuration", padding=10)
         left.pack(side="left", fill="both", padx=5, pady=5)
 
@@ -310,7 +428,12 @@ class TrainingGUI:
         self.update_log("Pret.")
         self.update_log(f"Generation actuelle : {self.current_generation}")
 
-    def _build_match_tab(self, parent):
+    def _build_match_tab(self, parent): 
+        """Construit l'onglet Match. Spinbox du nombre de parties, 
+        deux blocs "Poids A" et "Poids B" avec trois boutons chacun 
+        (Charger depuis fichier, Meilleure gen, Gen. spécifique),
+          bouton "Démarrer le Match", et journal scrollable du match"""
+        
         cf = ttk.LabelFrame(parent, text="Configuration du Match", padding=10)
         cf.pack(fill="x", padx=5, pady=5)
 
@@ -346,7 +469,11 @@ class TrainingGUI:
         self.match_log_text.pack(side="left", fill="both", expand=True)
         sb.config(command=self.match_log_text.yview)
 
-    def _build_stats_tab(self, parent):
+    def _build_stats_tab(self, parent): 
+        """Construit l'onglet Statistiques : un simple widget Text scrollable
+          et appelle update_stats_display() pour le remplir dès l'ouverture"""
+        
+          
         ttk.Label(parent, text="Statistiques", font=("Helvetica", 14, "bold")).pack(pady=10)
         sf = ttk.Frame(parent)
         sf.pack(fill="both", expand=True, padx=10, pady=10)
@@ -357,7 +484,9 @@ class TrainingGUI:
         sb.config(command=self.stats_text.yview)
         self.update_stats_display()
 
-    def start_training(self):
+    def start_training(self): 
+        """Démarre l'entraînement. Lit les valeurs des spinboxes, active les boutons Pause et Stop, 
+        désactive Démarrer, crée et lance un TrainingThread en mode "training"""
         if self.is_training:
             return
         self.max_iterations = int(self.iterations_var.get())
@@ -378,7 +507,11 @@ class TrainingGUI:
         self.training_thread = TrainingThread(self, "training")
         self.training_thread.start()
 
-    def start_match(self):
+    def start_match(self): 
+        """Démarre un match libre. Lit le nombre de parties,
+        vide le journal de match,
+          crée et lance un TrainingThread en mode 'match'"""
+        
         if self.is_training:
             return
         self.match_games = int(self.match_games_var.get())
@@ -390,6 +523,10 @@ class TrainingGUI:
         self.training_thread.start()
 
     def pause_training(self):
+        """Bascule entre pause et reprise 
+        Met à jour le texte du bouton Pause et appelle thread.pause() 
+        ou thread.resume()"""
+
         if not self.training_thread:
             return
         if self.is_paused:
@@ -402,15 +539,23 @@ class TrainingGUI:
             self.is_paused = True
 
     def stop_training(self):
+        """Appelle thread.stop() pour demander l'arrêt de l'entraînement"""
         if self.training_thread:
             self.training_thread.stop()
 
     def training_finished(self):
+        """Appelée par le thread en fin d'exécution. Remet les flags à zéro et 
+        programme _finish_ui() dans le thread principal via root.after(0, ...)"""
+
         self.is_training = False
         self.is_paused   = False
         self.root.after(0, self._finish_ui)
 
     def _finish_ui(self):
+        
+        """Remet les boutons dans leur état initial (Démarrer réactivé, Pause et Stop désactivés), 
+        met à jour le label de génération et rafraîchit l'onglet statistiques"""
+
         self.start_btn.config(state="normal")
         self.pause_btn.config(state="disabled", text="Pause")
         self.stop_btn.config(state="disabled")
@@ -419,6 +564,10 @@ class TrainingGUI:
         self.update_stats_display()
 
     def update_log(self, msg):
+        """Ajoute une ligne de texte dans le journal approprié (entraînement ou match selon current_mode)
+          Utilise root.after(0, ...) pour s'assurer que la mise à jour se fait dans le thread principal Tkinter 
+        Contient la fonction interne _u() qui effectue l'insertion"""
+
         def _u():
             w = self.match_log_text if self.current_mode == "match" else self.log_text
             w.insert(tk.END, msg + "\n")
@@ -426,15 +575,24 @@ class TrainingGUI:
         self.root.after(0, _u)
 
     def update_progress(self, cur, tot):
+        """Met à jour la barre de progression et son label
+        Calcule le pourcentage cur/tot * 100
+          Utilise root.after(0, ...) avec la fonction interne _u()"""
+        
         def _u():
             self.progress_var.set((cur / tot) * 100 if tot > 0 else 0)
             self.progress_label.config(text=f"{cur} / {tot}")
         self.root.after(0, _u)
 
-    def add_training_stats(self, stats):
+    def add_training_stats(self, stats): 
+        """Ajoute un dictionnaire de statistiques à training_history.
+           Appelée par le thread après chaque itération"""
         self.training_history.append(stats)
 
     def update_stats_display(self):
+        """Reécrit entièrement le contenu de l'onglet Statistiques : résumé global (total itérations, nombre d'acceptations, taux d'acceptation),
+          puis les 20 dernières itérations avec leur numéro, génération, winrate et résultat"""
+       
         self.stats_text.delete(1.0, tk.END)
         if not self.training_history:
             self.stats_text.insert(tk.END, "Aucune statistique.\nLancez un entrainement.")
@@ -459,6 +617,10 @@ class TrainingGUI:
             )
 
     def load_weights(self, side):
+        """Ouvre un filedialog pour choisir un fichier JSON de poids
+          Charge le fichier, extrait les poids, et les assigne au joueur A ou B selon side 
+        Met à jour le label correspondant"""
+
         fn = filedialog.askopenfilename(
             title=f"Charger poids {side.upper()}",
             filetypes=[("JSON", "*.json"), ("Tous", "*.*")],
@@ -477,6 +639,9 @@ class TrainingGUI:
             messagebox.showerror("Erreur", str(e))
 
     def use_best_weights(self, side):
+        """Charge automatiquement les meilleurs poids actuels 
+        (via get_best_weights()) et les assigne au joueur A ou B"""
+
         try:
             w    = get_best_weights()
             name = f"Best (gen {self.current_generation})"
@@ -487,6 +652,10 @@ class TrainingGUI:
             messagebox.showerror("Erreur", str(e))
 
     def use_generation(self, side):
+        """Ouvre une petite fenêtre Toplevel avec un spinbox pour choisir
+          un numéro de génération Contient la fonction interne load() 
+          qui charge les poids de la génération choisie et les assigne au joueur A ou B"""
+        
         win = tk.Toplevel(self.root)
         win.title(f"Generation {side.upper()}")
         win.geometry("300x150")
@@ -495,6 +664,10 @@ class TrainingGUI:
         ttk.Spinbox(win, from_=0, to=self.current_generation, textvariable=gv, width=10).pack(pady=5)
 
         def load():
+            """Ouvre un filedialog pour choisir un fichier JSON de poids 
+            Charge le fichier, extrait les poids, et les assigne au joueur A ou B selon side
+            Met à jour le label correspondant"""
+            
             try:
                 w    = load_gen(gen_path(gv.get()))
                 name = f"gen_{gv.get()}"
