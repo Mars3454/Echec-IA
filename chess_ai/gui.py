@@ -1,11 +1,26 @@
 """
-gui.py — Interface Tkinter avec analyse en temps réel.
-Fonctionne avec :
-    engine_chess.py  (règles via python-chess)
-    ai.py            (votre nouvelle IA minimax)
+commentaire général du fichier : 
 
+C'est le fichier principal de l'application. 
+Il gère tout ce que l'utilisateur voit et fait :
+l'affichage de l'échiquier, les clics du joueur,
+les deux modes de jeu (Humain vs IA et IA vs IA), 
+et un panneau latéral qui affiche en temps réell'évaluation de la position et les meilleurscoups calculés
+Il est construit avec Tkinter et fait le lien entre le moteur de règles (engine_chess.py),
+ l'IA (ai.py) et le livre d'ouverture (opening_book.py)
+gui.py — Interface Tkinter avec analyse en temps réel
 Modes : Humain vs IA  |  IA vs IA
-Panneau d'analyse : top 5 coups, évaluation, stats nœuds/temps.
+Panneau d'analyse : top 5 coups, évaluation, stats nœuds/temps. 
+
+
+Variables :
+
+LIGHT	:Couleur beige des cases claires de l'échiquier
+DARK	:Couleur marron des cases sombres
+SEL	Vert: appliqué sur la case sélectionnée par le joueur
+MOVEH	:Jaune appliqué sur les destinations légales de la pièce sélectionnée
+LAST	:Bleu ciel appliqué sur les deux cases du dernier coup joué
+
 """
 
 from __future__ import annotations
@@ -34,7 +49,23 @@ LAST  = "#87CEFA"
 
 class AnalysisPanel(tk.Frame):
 
+    """variables : 
+    
+self.eval_label	: Label affichant le score de la position (ex. +1.50 ou Mat+3)
+self.eval_bar	: Canvas dessinant la barre visuelle blanc/noir proportionnelle au score
+self.nodes_lbl	: Label affichant le nombre de nœuds explorés
+self.time_lbl	: Label affichant le temps de calcul en secondes
+self.nps_lbl	: Label affichant les nœuds par seconde (indicateur de performance)
+self.moves_canvas	:Canvas contenant la zone scrollable des meilleurs coups
+self.moves_frame	:Frame interne au canvas où sont placés les widgets de coups
+self.move_widgets	: Liste des widgets affichés, gardés en mémoire pour pouvoir les effacer avant la prochaine mise à jour
+
+    """
+
     def __init__(self, parent):
+        """Crée et organise tous les widgets du panneau : titre, label de score, 
+        barre graphique, labels de stats, séparateur,
+          et zone scrollable pour les meilleurs coups"""
         super().__init__(parent, bd=2, relief="groove")
 
         tk.Label(self, text="📊 Analyse de Position",
@@ -80,6 +111,8 @@ class AnalysisPanel(tk.Frame):
 
     @staticmethod
     def _safe_score(score: float) -> float:
+        """Remplace les valeurs mathématiques invalides (NaN, infini)
+          par ±MATE_SCORE pour éviter tout crash lors de l'affichage"""
         import math
         if math.isnan(score) or math.isinf(score):
             return MATE_SCORE if score > 0 else -MATE_SCORE
@@ -87,6 +120,8 @@ class AnalysisPanel(tk.Frame):
 
     @staticmethod
     def _score_text(score: float) -> str:
+        """Convertit un score numérique brut en texte lisible : "Mat+2" si un mat est détecté,
+          "+1.50" si le score est en centipions, ou la valeur directe sinon"""
         import math
         if math.isnan(score) or math.isinf(score):
             score = MATE_SCORE if score > 0 else -MATE_SCORE
@@ -102,6 +137,9 @@ class AnalysisPanel(tk.Frame):
             return f"{score:+.2f}"
 
     def update_evaluation(self, score: float, perspective: int = 1):
+        """Met à jour le label de score et la barre graphique. Choisit la couleur du texte :
+          vert si avantage, rouge si désavantage, gris si position nulle"""
+        
         import math
         if math.isnan(score) or math.isinf(score):
             score = MATE_SCORE if score > 0 else -MATE_SCORE
@@ -114,6 +152,8 @@ class AnalysisPanel(tk.Frame):
         self._draw_bar(score)
 
     def _draw_bar(self, score: float):
+        """Dessine la barre bicolore blanc/noir sur le canvas
+          Le score est limité entre -10 et +10 pour le dessin, le centre représente l'égalité"""
         import math
         c = self.eval_bar
         w = c.winfo_width() or 400
@@ -128,6 +168,8 @@ class AnalysisPanel(tk.Frame):
         c.create_line(w // 2, 0, w // 2, 20, fill="gray", width=2)
 
     def update_stats(self, nodes: int, elapsed: float):
+        """Met à jour les trois labels de statistiques : 
+        nombre de nœuds (avec séparateurs de milliers), temps écoulé, et nœuds par seconde"""
         self.nodes_lbl.config(text=f"Nœuds: {nodes:,}")
         self.time_lbl.config(text=f"Temps: {elapsed:.2f}s")
         nps = int(nodes / elapsed) if elapsed > 0 else 0
@@ -135,6 +177,8 @@ class AnalysisPanel(tk.Frame):
 
     def update_top_moves(self, moves_data: List[Dict],
                          chosen_uci: Optional[str] = None):
+        """Efface les anciens widgets de coups, puis recrée la liste des 5 meilleurs coups
+          Surligne en vert et ajoute "✓ CHOISI" sur le coup effectivement joué par l'IA"""
         for w in self.move_widgets:
             w.destroy()
         self.move_widgets.clear()
@@ -162,6 +206,7 @@ class AnalysisPanel(tk.Frame):
             self.move_widgets.append(mf)
 
     def clear(self):
+        """Remet tout le panneau à zéro : score à 0.00, stats vides, barre centrée, liste de coups vide"""
         self.eval_label.config(text="0.00", fg="blue")
         self.nodes_lbl.config(text="Nœuds: 0")
         self.time_lbl.config(text="Temps: 0.0s")
@@ -177,8 +222,32 @@ class AnalysisPanel(tk.Frame):
 # ============================================================
 
 class ChessApp:
+    """variables : 
+    self.root :	Fenêtre principale Tkinter
+    self.state :	État courant du jeu (plateau + tour + historique)
+    self.game_mode : 	Mode en cours : "human_vs_ai" ou "ai_vs_ai", None avant le choix
+    self.human_color : 	Couleur du joueur humain : 1 = blancs, -1 = noirs
+    self.ai_depth_white : 	Profondeur de recherche de l'IA pour les blancs
+    self.ai_depth_black : 	Profondeur de recherche de l'IA pour les noirs
+    self.ai_vs_ai_running : Booléen indiquant si une partie IA vs IA est en cours
+    self.ai_vs_ai_paused : 	Booléen indiquant si la partie IA vs IA est en pause
+    self.animation_delay : 	Délai en ms entre deux coups en mode IA vs IA
+    self.selected : Coordonnées (ligne, colonne) de la case sélectionnée, None si aucune
+    self.legal_from_selected :	Liste des coups légaux depuis la case sélectionnée
+    self.last_move : Coordonnées (sr, sc, er, ec) du dernier coup joué
+    self.status	: Label de statut au-dessus de l'échiquier (tour, mode)
+    self.board_frame : 	Frame contenant les 64 boutons de l'échiquier
+    self.buttons : 	Dictionnaire {(r,c): Button} pour accéder à chaque case
+    self.analysis_panel : 	Instance du panneau d'analyse
+    self.depth_white_var : 	Variable Tkinter liée au spinbox profondeur blancs
+    self.depth_black_var : 	Variable Tkinter liée au spinbox profondeur noirs
+    self.delay_var : 	Variable Tkinter liée au spinbox du délai
+    self.pause_btn : 	Bouton Pause/Reprendre, désactivé en mode humain
+"""
 
     def __init__(self, root: tk.Tk):
+        """Constructeur. Initialise toutes les variables, 
+        construit l'interface avec _build_interface(), puis ouvre le dialogue de choix de mode """
         self.root = root
         self.root.title("Échecs — IA python-chess")
 
@@ -202,6 +271,8 @@ class ChessApp:
     # ------------------------------------------------------------------ UI --
 
     def _build_interface(self):
+        """Construit la mise en page générale : colonne gauche (statut, 
+        échiquier, contrôles avec spinboxes et boutons) et colonne droite (panneau d'analyse)"""
         main = tk.Frame(self.root)
         main.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -244,6 +315,8 @@ class ChessApp:
         self._build_board()
 
     def _build_board(self):
+        """Crée les 64 boutons de l'échiquier en grille 8×8
+          Chaque bouton est relié à on_click avec ses coordonnées capturées dans un lambda"""
         for r in range(8):
             for c in range(8):
                 bg  = LIGHT if (r + c) % 2 == 0 else DARK
@@ -257,6 +330,8 @@ class ChessApp:
     # ---------------------------------------------------------------- dialogs -
 
     def _ask_game_mode(self):
+        """Ouvre une fenêtre modale proposant les deux modes de jeu contient les fonctions internes hvai() 
+        (humain vs IA → appelle _ask_side) et avai() (IA vs IA → appelle _start_ai_vs_ai)"""
         win = tk.Toplevel(self.root); win.title("Mode de jeu"); win.grab_set()
         tk.Label(win, text="Mode de jeu :", font=("Helvetica", 14, "bold")).pack(padx=20, pady=15)
         btns = tk.Frame(win); btns.pack(pady=10)
@@ -271,6 +346,10 @@ class ChessApp:
         self._center(win)
 
     def _ask_side(self):
+        """Ouvre une fenêtre modale pour choisir la couleur du joueur humain contient les fonctions internes sw() 
+        (blancs, human_color = 1)et sb() (noirs, human_color = -1),
+          toutes deux appelant _start_game() ensuite"""
+        
         win = tk.Toplevel(self.root); win.title("Couleur"); win.grab_set()
         tk.Label(win, text="Tu joues avec :", font=("Helvetica", 12)).pack(padx=12, pady=12)
         btns = tk.Frame(win); btns.pack(pady=10)
@@ -283,7 +362,9 @@ class ChessApp:
         self._center(win); self.root.wait_window(win)
 
     @staticmethod
-    def _center(win: tk.Toplevel):
+    def _center(win: tk.Toplevel): 
+        """Méthode statique. Centre une fenêtre Toplevel au milieu de l'écran 
+        en calculant les coordonnées depuis la résolution de l'écran"""
         win.update_idletasks()
         x = (win.winfo_screenwidth()  - win.winfo_width())  // 2
         y = (win.winfo_screenheight() - win.winfo_height()) // 2
@@ -292,6 +373,8 @@ class ChessApp:
     # --------------------------------------------------------------- gameplay -
 
     def _start_game(self):
+        """Lance la partie : rafraîchit l'affichage,
+          et si c'est à l'IA de commencer en premier, déclenche ai_play """
         self._refresh()
         if self.game_mode == "human_vs_ai" and self.human_color != self.state.turn:
             self.root.after(200, self.ai_play)
@@ -302,11 +385,16 @@ class ChessApp:
             self.root.after(200, self._ai_vs_ai_step)
 
     def _start_ai_vs_ai(self):
+        """Active les flags de la partie IA vs IA puis appelle _start_game()"""
         self.ai_vs_ai_running = True
         self.ai_vs_ai_paused  = False
         self._start_game()
 
     def new_game(self):
+        """Remet tout à zéro : arrête l'IA, réinitialise le plateau, la sélection, le dernier coup, 
+        réinitialise le livre d'ouverture (reset_line()), lit les nouvelles valeurs des spinboxes,
+           vide le panneau d'analyse, et rouvre le dialogue de mode"""
+        
         self.ai_vs_ai_running = False
         self.ai_vs_ai_paused  = False
         self.pause_btn.config(state="disabled", text="Pause")
@@ -323,6 +411,8 @@ class ChessApp:
         self._ask_game_mode()
 
     def toggle_pause(self):
+        """Bascule la pause en mode IA vs IA. Met à jour le texte du bouton 
+        et relance _ai_vs_ai_step si on reprend"""
         if self.game_mode != "ai_vs_ai": return
         self.ai_vs_ai_paused = not self.ai_vs_ai_paused
         self.pause_btn.config(text="Reprendre" if self.ai_vs_ai_paused else "Pause")
@@ -330,6 +420,10 @@ class ChessApp:
             self.root.after(100, self._ai_vs_ai_step)
 
     def on_click(self, r: int, c: int):
+        """Gère les clics en mode humain. Premier clic : sélectionne la pièce 
+        et calcule les coups légaux. Deuxième clic sur une destination valide : 
+        joue le coup, rafraîchit, vérifie la fin de partie, puis déclenche ai_play"""
+
         if self.game_mode != "human_vs_ai": return
         if self.state.turn != self.human_color: return
 
@@ -368,6 +462,11 @@ class ChessApp:
     # --------------------------------------------------------------- analyse -
 
     def _analyze_position(self, depth: int):
+        """Cœur de l'analyse. Consulte d'abord le livre d'ouverturze
+          Si hors livre, évalue chaque coup légal en lançant negamax sur la position après ce coup
+            (avec le score inversé pour revenir au point de vue du joueur actif),
+              trie les résultats et retourne le meilleur score, la liste des coups, 
+              le nombre de nœuds et le temps écoulé"""
         board = self.state.get_board()
         history = get_history_uci(board)
 
@@ -439,6 +538,9 @@ class ChessApp:
         return best_score, moves_data, nodes_ref[0], elapsed
 
     def ai_play(self):
+        """Fait jouer l'IA un coup en mode Humain vs IA : appelle _analyze_position,
+          choisit le meilleur coup, met à jour le panneau d'analyse, applique le coup
+            et vérifie la fin de partie"""
 
         if self._check_end(): return
         if self.state.turn == self.human_color: return
@@ -459,6 +561,10 @@ class ChessApp:
         self._refresh(); self._check_end()
 
     def _ai_vs_ai_step(self):
+        """"Fait jouer un coup en mode IA vs IA
+          Identique à ai_play, mais se reprogramme elle-même via root.after(delay, ...) 
+          pour enchaîner les coups automatiquement avec le délai configuré"""
+        
         if not self.ai_vs_ai_running or self.ai_vs_ai_paused: return
         if self._check_end():
             self.ai_vs_ai_running = False; self.pause_btn.config(state="disabled"); return
@@ -485,6 +591,10 @@ class ChessApp:
     # --------------------------------------------------------------- fin -----
 
     def _check_end(self) -> bool:
+        """Vérifie si la partie est terminée (échec et mat, pat, matériel insuffisant,
+          règle des 50 coups) affiche un message informatif et retourne True si la partie 
+          est finie, False sinon"""
+        
         b = self.state.get_board()
         if b.is_checkmate():
             winner = "Noirs" if self.state.turn == 1 else "Blancs"
@@ -507,7 +617,11 @@ class ChessApp:
 
     # --------------------------------------------------------------- refresh --
 
-    def _refresh(self):
+    def _refresh(self): 
+        """Redessine les 64 cases : calcule la couleur de fond de chacune 
+        (normale, sélection, coup légal, dernier coup) et met à jour le symbole Unicode 
+        de la pièce présente"""
+
         who = "Blancs" if self.state.turn == 1 else "Noirs"
         if self.game_mode == "human_vs_ai":
             hstr = "Blancs" if self.human_color == 1 else "Noirs"
@@ -540,6 +654,9 @@ class ChessApp:
 
 
 def main():
+
+    """Point d'entrée : crée la fenêtre Tkinter,
+      instancie ChessApp et lance la boucle principale avec root.mainloop()"""
     root = tk.Tk()
     ChessApp(root)
     root.mainloop()
