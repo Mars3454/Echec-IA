@@ -1,6 +1,19 @@
 """
-opening_book.py - Livre structuré par lignes complètes.
-L'IA choisit une ligne et la suit.
+commentaire général du fichier : 
+Ce fichier gère le livre d'ouverture de l'IA
+Il contient une collection de lignes d'ouverture connues du monde des échecs 
+(Italienne, Sicilienne, Française, Gambit Dame, Londres, etc.)
+organisées selon la couleur de l'IA et le premier coup adverse
+ Au lieu de calculer pendant les premiers coups, l'IA suit simplement une ligne préenregistrée,
+ce qui la rend plus rapide et joue des débuts solides. La ligne est suivie 
+jusqu'à 6 demi-coups maximum, et abandonnée si l'adversaire s'en écarte
+
+variables : 
+
+OPENING_PLIES :Nombre maximum de demi-coups couverts par le livre (valeur : 6)
+OPENING_LINES :Dictionnaire principal contenant toutes les lignes d'ouverture classées en 5 catégories : "white" (blancs), "black_vs_e4", "black_vs_d4", "black_vs_c4", "black_vs_nf3"
+CURRENT_LINE :Variable globale mémorisant la ligne d'ouverture en cours de suivi. Vaut None si aucune ligne n'est choisie ou si on est sorti du livre
+ 
 """
 
 from __future__ import annotations
@@ -86,12 +99,24 @@ OPENING_LINES: Dict[str, List[List[str]]] = {
 CURRENT_LINE: List[str] | None = None
 
 
-def reset_line():
+def reset_line(): 
+
+    """ Remet CURRENT_LINE à None Appelée au début d'une nouvelle partie
+      (depuis new_game dans gui.py) ou quand la position diverge de la ligne choisie"""
     global CURRENT_LINE
     CURRENT_LINE = None
 
 
 def pick_book_move(history: List[str], is_white: bool) -> str | None:
+    """Fonction principale du livre. Reçoit la liste des coups déjà joués en notation UCI 
+    et un booléen indiquant si c'est au tour des blancs
+    Si aucune ligne n'est encore choisie, en sélectionne une aléatoirement 
+    dans la catégorie appropriée selon le premier coup adverse
+    Si une ligne est en cours et que l'historique lui correspond exactement, 
+    retourne le prochain coup de cette ligne. Si l'adversaire s'est écarté de la ligne, 
+    appelle reset_line() et retourne None. Retourne aussi None si on dépasse les 6 demi-coups"""
+
+    
     global CURRENT_LINE
 
     # Fin forcée du livre
