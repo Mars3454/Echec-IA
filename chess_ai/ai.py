@@ -1,4 +1,32 @@
 """
+
+commentaire général du fichier : 
+
+Le fichier ai.py contient l’intelligence artificielle principale du moteur d’échecs.
+Son rôle est d’analyser une position et de déterminer le meilleur coup à jouer.
+Pour cela, il utilise deux concepts essentiels :
+Negamax est un algorithme de recherche récursif utilisé pour explorer les différents coups possibles. Il repose sur l’idée que ce qui est bon pour un joueur est mauvais pour l’adversaire. On inverse donc simplement le score à chaque niveau de recherche, ce qui simplifie l’algorithme Minimax classique.
+L’élagage Alpha-Beta est une optimisation de cet algorithme. Il permet d’arrêter l’exploration d’une branche de l’arbre de recherche lorsqu’on sait qu’elle ne pourra pas améliorer le résultat. Cela réduit fortement le nombre de positions analysées et rend le moteur beaucoup plus rapide.
+En combinant Negamax et l’élagage Alpha-Beta, le moteur peut rechercher efficacement les meilleurs coups tout en restant performant.
+
+
+Variables : 
+-	_ACTIVE_WEIGHTS : dictionnaire contenant les poids actuellement utilisés pour l’évaluation (utile pour l’entraînement).
+-	variable : instance d’une classe Variable utilisée ailleurs dans le projet.
+-	MATE_SCORE : valeur très élevée (9999) représentant un mat.
+-	DEPTH : profondeur de recherche par défaut.
+-	INF : représente l’infini pour l’algorithme alpha-beta.
+-	PIECE_VALUES : dictionnaire contenant les valeurs relatives des pièces pour le tri des coups.
+-	NULL_MOVE_R : réduction utilisée dans le Null Move Pruning.
+-	ASPIRATION_DELTA : largeur de la fenêtre d’aspiration.
+-	FUTILITY_MARGIN : marge utilisée pour le Futility Pruning.
+-	HISTORY_AGING_DIV : diviseur appliqué aux valeurs de l’historique pour éviter qu’elles deviennent trop grandes.
+-	HISTORY_MAX : valeur maximale autorisée dans la table history.
+-	KILLER_MOVES : dictionnaire stockant les meilleurs coups non-captures par profondeur.
+-	HISTORY : dictionnaire stockant un score pour chaque coup efficace.
+-	TT : Transposition Table globale stockant les positions déjà calculées. 
+
+
 ai.py — IA d'échecs optimisée basée sur python-chess.
 
 OPTIMISATIONS PAR RAPPORT À LA VERSION PRÉCÉDENTE :
@@ -47,6 +75,7 @@ Interfaces exposées (inchangées) :
     alphabeta(board, depth, alpha, beta, ply, tt, weights) → (score, nodes, move)
     MATE_SCORE
 """
+
 
 import chess
 import time
@@ -119,7 +148,7 @@ TT:           dict = {}              # Transposition Table globale
 # ──────────────────────────────────────────────────────────────────────────────
 
 @dataclass
-class SearchResult:
+class SearchResult:               # Cette classe contient le résultat final de la recherche.
     move:  Optional[chess.Move]
     score: float
     nodes: int
@@ -130,11 +159,15 @@ class SearchResult:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def get_history_uci(board: chess.Board) -> list[str]:
+    """retourne la liste des coups déjà joués dans la partie , au format UCI"""
+
     return [m.uci() for m in board.move_stack]
 
 
 def _age_history():
-    """Divise tous les scores d'historique par HISTORY_AGING_DIV."""
+    """ Réduit progressivement les valeurs stockées dans
+      la table HISTORY afin d’éviter qu’elles ne deviennent trop grandes"""
+    
     for k in list(HISTORY.keys()):
         HISTORY[k] //= HISTORY_AGING_DIV
         if HISTORY[k] == 0:
@@ -142,6 +175,9 @@ def _age_history():
 
 
 def _update_killer(depth: int, move: chess.Move):
+    """Ajoute un coup efficace à la liste des killer moves pour une profondeur donnée
+       Les killer moves sont des coups non-captures qui ont provoqué une coupure alpha-beta"""
+
     if depth not in KILLER_MOVES:
         KILLER_MOVES[depth] = []
     if move not in KILLER_MOVES[depth]:
@@ -151,6 +187,10 @@ def _update_killer(depth: int, move: chess.Move):
 
 
 def _update_history(piece_type: int, to_square: int, depth: int):
+
+    """Augmente le score historique d’un coup efficace
+Cela permet de favoriser ce coup lors des futurs tris"""
+
     key = (piece_type, to_square)
     HISTORY[key] = min(HISTORY.get(key, 0) + depth * depth, HISTORY_MAX)
 
@@ -161,6 +201,10 @@ def _update_history(piece_type: int, to_square: int, depth: int):
 
 def _move_score(board: chess.Board, move: chess.Move, depth: int,
                 tt_best: Optional[chess.Move]) -> int:
+    
+    """Attribue un score heuristique à un coup pour améliorer l’ordre d’exploration
+        Un bon tri améliore fortement l’efficacité de l’alpha-beta"""
+    
     if move == tt_best:
         return 100_000
 
@@ -204,6 +248,13 @@ def _move_score(board: chess.Board, move: chess.Move, depth: int,
 def quiescence(board: chess.Board, alpha: float, beta: float,
                nodes_ref: list, qdepth: int = 0,
                weights=None) -> float:
+    
+    """Prolonge la recherche lorsqu’on atteint la profondeur 0
+Au lieu d’évaluer immédiatement, elle explore uniquement :
+	-Les captures
+    -Les promotions
+Cela permet d’éviter l’effet horizon (ne pas rater une combinaison tactique immédiate) """
+   
     nodes_ref[0] += 1
 
     # Score statique du point de vue du joueur actif
@@ -257,6 +308,19 @@ def negamax(board: chess.Board, depth: int, alpha: float, beta: float,
             allow_null: bool = True,
             weights=None) -> tuple[float, Optional[chess.Move]]:
     """
+    Fonction principale du moteur.
+    Elle :
+        1.	Vérifie la Transposition Table
+        2.	Gère les positions terminales
+        3.	Applique la quiescence si profondeur 0
+        4.	Applique le Null Move Pruning
+        5.	Trie les coups
+        6.	Applique Late Move Reduction
+        7.	Met à jour alpha et beta
+        8.	Coupe si alpha ≥ beta
+        9.	Stocke le résultat dans la TT
+    C’est le cœur stratégique du moteur.
+
     Retourne (score_du_joueur_actif, meilleur_coup).
     Score positif = bon pour le joueur dont c'est le tour.
     """
@@ -420,6 +484,10 @@ def negamax(board: chess.Board, depth: int, alpha: float, beta: float,
 
 def alphabeta(board: chess.Board, depth: int, alpha: float, beta: float,
               ply: int, tt: dict, weights: Any) -> tuple:
+    """Fonction d’interface compatible avec le GUI
+    Elle appelle negamax et retourne :
+    (score, nombre_de_noeuds, meilleur_coup)"""
+
     nodes_ref = [0]
     score, move = negamax(board, depth, alpha, beta, nodes_ref, ply,
                           weights=weights)
@@ -427,11 +495,17 @@ def alphabeta(board: chess.Board, depth: int, alpha: float, beta: float,
 
 
 def evaluate(board: chess.Board, ply: int = 0, weights: Any = None) -> float:
+
+    """Interface simple vers la fonction d’évaluation"""
+
     return evaluate_board(board, weights)
 
 
 def order_moves(board: chess.Board, moves, tt_best=None,
                 killer_moves=None, level=None):
+    
+    """Trie les coups en utilisant _move_score"""
+
     return sorted(moves,
                   key=lambda m: _move_score(board, m, level or 0, tt_best),
                   reverse=True)
@@ -439,6 +513,13 @@ def order_moves(board: chess.Board, moves, tt_best=None,
 
 def choose_best_move(board: chess.Board, depth: int,
                      weights: Any = None) -> SearchResult:
+    
+    """Recherche à profondeur fixe.
+Étapes :
+1.	Vérifie l’ouverture (opening book)
+2.	Lance negamax
+3.	Retourne un SearchResult
+"""
 
     history = get_history_uci(board)
     w = _resolve_weights(weights)
@@ -463,6 +544,11 @@ def choose_best_move(board: chess.Board, depth: int,
 def choose_best_move_timed(board: chess.Board, movetime_ms: int,
                            max_depth: int = 6,
                            weights: Any = None) -> SearchResult:
+    
+    """Recherche avec limite de temps.
+    Elle augmente progressivement la profondeur jusqu’à atteindre la limite de temps.
+"""
+
     start       = time.time()
     best_move   = None
     best_score  = 0.0
@@ -509,5 +595,8 @@ def choose_best_move_timed(board: chess.Board, movetime_ms: int,
 
 
 def choose_move(board: chess.Board) -> Optional[chess.Move]:
+
+
+    """Fonction simplifiée qui appelle choose_best_move avec la profondeur par défaut"""
     res = choose_best_move(board, depth=DEPTH)
     return res.move
