@@ -1,8 +1,16 @@
 """
+commentaire général du fichier : 
+Ce fichier est le centre névralgique du système d'entraînement
+Il définit les 40 paramètres entraînables de la fonction d'évaluation de 
+l'IA (valeurs des pièces, multiplicateurs par phase de jeu, sécurité du roi,
+structure de pions, mobilité, centre), leurs valeurs par défaut, leurs
+bornes autorisées, et leurs regroupements pour la mutation
+Il fournit aussi toutes les fonctions utilitaires de lecture/écriture des
+fichiers de poids sur le disque
 weights.py - Gestion des poids d'évaluation entraînables.
 
-PARAMÈTRES ENTRAÎNABLES (40 au total) :
-─────────────────────────────────────────────────────────────────
+PARAMÈTRES ENTRAÎNABLES 
+
 Valeurs des pièces (5) :
   pv_pawn, pv_knight, pv_bishop, pv_rook, pv_queen
 
@@ -44,7 +52,12 @@ Mobilité (2) :
 Centre (2) :
   center_attack_bonus       (bonus attaque centre principal)
   center_ext_bonus          (bonus attaque centre étendu)
-─────────────────────────────────────────────────────────────────
+
+  variables : 
+DEFAULT_WEIGHTS ==	Dictionnaire des 40 paramètres avec leurs valeurs de départ. Point de départ de tout entraînement
+WEIGHT_BOUNDS == 	Dictionnaire associant à chaque paramètre un tuple (min, max) pour éviter des valeurs absurdes lors des mutations
+PARAM_GROUPS == 	Dictionnaire organisant les 40 paramètres en 9 groupes thématiques ("piece_values", "opening", "middlegame", "endgame", "king_safety", "pawns", "mobility", "center", "phase"). Utilisé pour cibler les mutations
+
 """
 
 from __future__ import annotations
@@ -186,15 +199,23 @@ PARAM_GROUPS = {
 # ──────────────────────────────────────────────────────────────────────────────
 
 def project_root() -> str:
+    """Retourne le chemin absolu du répertoire racine du projet
+      en remontant d'un niveau depuis le répertoire de weights.py"""
+    
     return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 def generations_dir() -> str:
+    """Retourne le chemin du dossier generations/ où sont stockés tous les fichiers de poids"""
     return os.path.join(project_root(), "generations")
 
 def best_path() -> str:
+    """Retourne le chemin du fichier best.json, 
+    qui contient uniquement un pointeur (le chemin) vers le meilleur fichier de poids actuellement"""
+
     return os.path.join(generations_dir(), "best.json")
 
 def gen_path(n: int) -> str:
+    """Retourne le chemin du fichier de poids d'une génération précise : generations/weights_gen_N.json"""
     return os.path.join(generations_dir(), f"weights_gen_{n}.json")
 
 
@@ -203,7 +224,9 @@ def gen_path(n: int) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def clamp_weights(w: Dict[str, float]) -> Dict[str, float]:
-    """Ramène chaque paramètre dans ses bornes autorisées."""
+    """Prend un dictionnaire de poids et ramène chaque valeur dans ses bornes autorisées selon WEIGHT_BOUNDS 
+    Utilisée après chaque mutation pour garantir la validité des poids"""
+
     out = {}
     for k, v in w.items():
         lo, hi = WEIGHT_BOUNDS.get(k, (-1e9, 1e9))
@@ -212,6 +235,11 @@ def clamp_weights(w: Dict[str, float]) -> Dict[str, float]:
 
 
 def ensure_defaults() -> None:
+    """Garantit l'existence des fichiers nécessaires au démarrage. Crée le dossier generations/ si besoin
+     crée weights_gen_0.json avec les valeurs par défaut si absent, 
+    et crée best.json pointant vers gen_0 si absent
+     Appelée au démarrage de tout module utilisant le système de poids"""
+    
     os.makedirs(generations_dir(), exist_ok=True)
     p0 = gen_path(0)
     if not os.path.exists(p0):
@@ -222,6 +250,9 @@ def ensure_defaults() -> None:
 
 def save_gen(path: str, gen_id: int, weights: Dict[str, float],
              name: Optional[str] = None) -> None:
+    
+    """Sauvegarde un dictionnaire de poids dans un fichier JSON structuré contenant la version (2),
+      le nom, la date de création et les poids arrondis à 4 décimales."""
     payload = {
         "version":    2,
         "name":       name or f"gen_{gen_id}",
@@ -233,6 +264,10 @@ def save_gen(path: str, gen_id: int, weights: Dict[str, float],
 
 
 def load_gen(path: str) -> Dict[str, float]:
+    """Charge un fichier de poids JSON et retourne les poids fusionnés avec les valeurs par défaut 
+    (si un paramètre est absent du fichier,
+      il prend sa valeur par défaut). Applique clamp_weights avant de retourner"""
+    
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     w = data.get("weights", {})
@@ -244,6 +279,9 @@ def load_gen(path: str) -> Dict[str, float]:
 
 
 def get_best_weights() -> Dict[str, float]:
+    """Charge et retourne les meilleurs poids actuels en lisant best.json pour trouver le chemin du fichier,
+      puis en chargeant ce fichier avec load_gen. Si le fichier pointé n'existe plus, replie sur gen_0"""
+    
     ensure_defaults()
     with open(best_path(), "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -255,6 +293,7 @@ def get_best_weights() -> Dict[str, float]:
 
 
 def get_best_file() -> str:
+    """Retourne simplement le chemin du meilleur fichier de poids actuel (sans charger son contenu)"""
     ensure_defaults()
     with open(best_path(), "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -262,11 +301,16 @@ def get_best_file() -> str:
 
 
 def set_best(weights_file: str) -> None:
+    """Écrit dans best.json le chemin absolu du nouveau meilleur fichier de poids
+      Appelée après chaque candidat accepté pour mettre à jour le pointeur"""
+    
     with open(best_path(), "w", encoding="utf-8") as f:
         json.dump({"path": os.path.abspath(weights_file)}, f, indent=2)
 
 
 def latest_generation_index() -> int:
+    """ Parcourt les fichiers weights_gen_0.json, weights_gen_1.json, etc 
+    en incrémentant jusqu'à ne plus en trouver. Retourne le numéro de la génération la plus récente"""
     ensure_defaults()
     i = 0
     while os.path.exists(gen_path(i + 1)):
