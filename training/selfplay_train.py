@@ -1,5 +1,13 @@
 """
-selfplay_train.py - Entraînement en self-play par générations (sans Stockfish).
+commentaire général du fichier : 
+Ce fichier est la version sans interface graphique de l'entraînement en 
+self-play. Il implémente la même logique que training_gui.py mais en ligne 
+de commande, lisible dans un terminal. Son principe : 
+charger les meilleurs poids actuels (le "champion"), 
+en générer un variant muté (le "candidat"), les faire s'affronter sur N parties
+ avec couleurs alternées, et accepter le candidat comme nouveau champion 
+ s'il gagne suffisamment. Chaque résultat est aussi enregistré 
+ dans un fichier history_selfplay.jsonl pour traçabilité
 
 Principe :
   1. Charger les meilleurs poids actuels (champion)
@@ -14,7 +22,12 @@ Corrections vs ancienne version :
   - Mutation par groupe (compatible avec les 38 nouveaux paramètres)
   - Amplitude de mutation flottante et proportionnelle à l'échelle du paramètre
   - Import corrigé (plus de référence à l'ancien module "engine")
-  - Historique JSONL enrichi (groupe muté, paramètres changés)
+  - Historique JSONL enrichi (groupe muté, paramètres changés) 
+
+variables : 
+PROJECT_ROOT ==	Chemin absolu du répertoire racine du projet, calculé depuis __file__
+CONFIG_PATH == 	Chemin vers le fichier config.json contenant les paramètres d'entraînement
+
 """
 from __future__ import annotations
 
@@ -47,14 +60,21 @@ from training.weights import (
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_config() -> dict:
+def load_config() -> dict: 
+    """Charge et retourne le fichier config.json sous forme de dictionnaire
+      Retourne un dictionnaire vide si le fichier n'existe pas"""
     if not os.path.exists(CONFIG_PATH):
         return {}
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def now() -> str:
+def now() -> str : 
+    """Retourne l'horodatage actuel sous forme de chaîne ISO 8601 (ex. "2024-12-01T15:30:00"),
+      utilisé pour horodater les enregistrements d'historique"""
+
+
+    
     return datetime.now().isoformat(timespec="seconds")
 
 
@@ -63,6 +83,7 @@ def now() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def mutate_weights(w: dict, mutation_strength: float = 1.0) -> tuple[dict, str, list]:
+
     """
     Mute 1 à 3 paramètres d'un groupe aléatoire.
 
@@ -92,10 +113,8 @@ def mutate_weights(w: dict, mutation_strength: float = 1.0) -> tuple[dict, str, 
 def play_game(weights_white: dict, weights_black: dict,
               movetime_ms: int, max_plies: int) -> int:
     """
-    Joue une partie complète.
-
-    Returns:
-        +1 si les blancs gagnent, -1 si les noirs gagnent, 0 pour nulle.
+     Joue une partie complète entre deux jeux de poids. Injecte les poids du joueur actif avant chaque coup
+    S'arrête en fin de partie ou après max_plies demi-coups. Retourne +1 (blancs gagnent), -1 (noirs gagnent) ou 0 (nulle)
     """
     state = GameState(board=initial_board())
 
@@ -138,11 +157,9 @@ def evaluate_match(best: dict, cand: dict,
                    n_games: int, movetime_ms: int,
                    max_plies: int) -> tuple[float, dict]:
     """
-    Fait jouer best vs cand sur n_games parties.
-    Les couleurs alternent : cand est blanc sur les parties paires, noir sur les impaires.
-
-    Returns:
-        (winrate_candidat, stats_dict)
+ Fait jouer n_games parties entre le champion et le candidat en alternant les couleurs
+ Affiche le score en temps réel dans le terminal après chaque partie
+Calcule et retourne le winrate du candidat ainsi que le dictionnaire de stats
     """
     wins = draws = losses = 0
 
@@ -175,7 +192,12 @@ def evaluate_match(best: dict, cand: dict,
 # Boucle principale
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
+def main(): 
+    """Boucle principale du self-play en ligne de commande 
+    Charge la config, initialise les poids depuis la dernière génération,
+      puis pour chaque itération : mute les poids, affiche les deltas, lance le match avec evaluate_match, 
+      accepte ou rejette le candidat, sauvegarde si accepté, et enregistre le résultat complet dans le fichier JSONL"""
+    
     cfg = load_config()
 
     # Paramètres (avec valeurs par défaut raisonnables)
